@@ -6,6 +6,9 @@
 /.vscode
 /.vs
 
+# Inteli-J
+/.idea
+
 # Jupyter
 /.ipynb_checkpoints
 
@@ -13,6 +16,7 @@
 __pycache__
 *.pyc
 /wheelhouse
+/venv
 
 # macOS
 \.DS_Store
