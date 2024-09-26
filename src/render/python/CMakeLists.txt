@@ -23,7 +23,7 @@ set(RENDER_PY_V_SRC
   ${CMAKE_CURRENT_SOURCE_DIR}/volume_v.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/volumegrid_v.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/signal.h
-  ${CMAKE_CURRENT_SOURCE_DIR}/sunsky_serializer.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/sunsky.cpp
   PARENT_SCOPE
 )
 

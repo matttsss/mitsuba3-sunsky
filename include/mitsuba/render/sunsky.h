@@ -1,41 +1,19 @@
-#include "skymodeldata.h"
+#pragma once
 
-#include <mitsuba/render/sunsky.h>
 #include <mitsuba/core/fstream.h>
+
+#include <mitsuba/core/logger.h>
+#include <mitsuba/mitsuba.h>
 
 NAMESPACE_BEGIN(mitsuba)
 
-    #define SIZE_WAVELENGTH_LINE (10 * 2 * 9 * 6)
+    void write_sky_model_data(const std::string &path);
 
-    void write_sky_model_data(const std::string &path) {
-        constexpr uint8_t NB_DIMS = 5;
-        constexpr uint32_t DEFAULT_DIMS[NB_DIMS] = {11, 10, 2, 9, 6};
-
-        FileStream file(path, FileStream::EMode::ETruncReadWrite);
-
-        // Write headers
-        file.write("SKY", 3);
-        file.write("v000", 4);
-
-        // Write tensor dimensions
-        file.write(&NB_DIMS, sizeof(NB_DIMS));
-        for (uint32_t dim : DEFAULT_DIMS)
-            file.write(dim);
-
-        // Write the data from the dataset
-        for (const double* dataset : datasets)
-            file.write_array(dataset, SIZE_WAVELENGTH_LINE);
-
-        file.close();
-    }
-
-    // TODO Equivalent of "MI_IMPLEMENT_CLASS_VARIANT(Texture, Object, "texture")"
-    // or "MI_INSTANTIATE_CLASS(Texture)"
     MI_VARIANT
-    dr::Tensor<DynamicBuffer<Float>> dumby_name(const std::string &path) {
+    dr::Tensor<DynamicBuffer<Float>> read_sky_model_data(const std::string &path) {
         using FloatStorage  = DynamicBuffer<Float>;
-        //using DoubleStorage = dr::float64_array_t<FloatStorage>;
-        using DoubleStorage = dr::float64_array_t<double>;
+        using DoubleStorage = dr::float64_array_t<FloatStorage>;
+        //using DoubleStorage = dr::float64_array_t<double>;
         using TensorXf      = dr::Tensor<FloatStorage>;
 
         FileStream file(path, FileStream::EMode::ERead);
