@@ -25,7 +25,6 @@ def dr_quintic_bezier(data: mi.TensorXf, x: mi.Float):
 
 
 def bezier_interpolate(data: mi.TensorXf, eta: mi.Float, t: mi.Int | mi.Float, a: mi.Int | mi.Float):
-    # TODO sort data shape
     dr.assert_true(data.shape[1] == 10 and data.shape[2] == 2, "Sky model dataset is not not of the right shape")
     dr.assert_true(0 <= eta <= 0.5 * dr.pi, "Sun elevation is not between 0 and %f (pi/2): %f", (dr.pi/2, eta))
     dr.assert_true(0 <= a <= 1, "Albedo (a) value is not between 0 and 1: %f", a)
@@ -65,8 +64,10 @@ def bezier_interpolate(data: mi.TensorXf, eta: mi.Float, t: mi.Int | mi.Float, a
 
 
 def test():
-    mi.write_sky_model_data("hello")
-    print(dr_quintic_bezier(dr.ones(mi.TensorXf, (11, 9, 6)), mi.Float(0.25)).shape)
-    print(bezier_interpolate(dr.ones(mi.TensorXf, (11, 10, 2, 9, 6)), mi.Float(0.25), mi.Int(5), mi.Int(0)).shape)
+    mi.write_sky_model_data("sunsky-testing/res/sunsky_dataset.rad.bin")
+    dataset = mi.read_sky_model_data("sunsky-testing/res/sunsky_dataset.rad.bin")
+    dr.print(dataset.shape)
+    dr.print(dr_quintic_bezier(dr.ones(mi.TensorXf, (11, 9, 6)), mi.Float(0.25)).shape)
+    dr.print(bezier_interpolate(dataset, mi.Float(0.25), mi.Int(5), mi.Int(0)).shape)
 
 test()

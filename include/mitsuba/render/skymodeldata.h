@@ -70,6 +70,8 @@ space version of the model.
 
 */
 
+#pragma once
+
 double dataset320[] =
 {
     // albedo 0, turbidity 1
