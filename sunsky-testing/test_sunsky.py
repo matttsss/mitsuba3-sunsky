@@ -1,8 +1,7 @@
-import pytest
-
 import sys
 sys.path.insert(0, "build/python")
 
+import drjit as dr
 import mitsuba as mi
 mi.set_variant("llvm_ad_spectral")
 
@@ -34,8 +33,6 @@ def create_emitter_and_spectrum(s_key='d65'):
 
     return emitter, spectrum
 
-
-@pytest.mark.parametrize("spectrum_key", spectrum_dicts.keys())
 def chi2_test(variants_vec_spectral, spectrum_key):
     sse_dict = {
         'type' : 'sunsky_emitter',
@@ -51,5 +48,13 @@ def chi2_test(variants_vec_spectral, spectrum_key):
 
     assert chi2.run()
 
+def tensor_test():
+    t_test = dr.reshape(mi.TensorXf, dr.arange(mi.TensorXf, 0, 24), (3, 2, -1), "C")
+    dr.print(t_test)
+
+    t_test = dr.gather(mi.TensorXf, t_test, 0)
+    dr.print(t_test)
+
 if __name__ == "__main__":
-    chi2_test(None, "d65")
+    #chi2_test(None, "d65")
+    tensor_test()

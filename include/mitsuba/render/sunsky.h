@@ -13,8 +13,8 @@
 NAMESPACE_BEGIN(mitsuba)
 
     #define NB_TURBIDITY 10
-    #define NB_CTRL_PT      6
-    #define NB_PARAMS       9
+    #define NB_CTRL_PT   6
+    #define NB_PARAMS    9
 
     #define F_DIM 5
     #define L_DIM 4
@@ -28,7 +28,6 @@ NAMESPACE_BEGIN(mitsuba)
     constexpr size_t l_tri_shape[L_DIM] = {3, 2, NB_TURBIDITY, NB_CTRL_PT};
 
     struct Dataset {
-
         size_t nb_dims;
         const size_t* dim_size;
 
@@ -151,56 +150,76 @@ NAMESPACE_BEGIN(mitsuba)
     }
 
     void write_sky_model_data_v2(const std::string &path) {
-        write_tensor_data_v2(path + ".bin", f_spectral);
-        write_tensor_data_v2(path + ".rad.bin", l_spectral);
+        write_tensor_data_v2(path + "_v2_spec.bin", f_spectral);
+        write_tensor_data_v2(path + "_v2_spec_rad.bin", l_spectral);
+        write_tensor_data_v2(path + "_v2_rgb.bin", f_RGB);
+        write_tensor_data_v2(path + "_v2_rgb_rad.bin", l_RGB);
+        write_tensor_data_v2(path + "_v2_xyz.bin", f_XYZ);
+        write_tensor_data_v2(path + "_v2_xyz_rad.bin", l_XYZ);
     }
 
-    void write_tensor_data_v1(const std::string &path, const Dataset& dataset) {
+    void write_tensor_data_v3(const std::string &path, const Dataset& dataset) {
         const auto [nb_dims, dim_size, p_dataset] = dataset;
         FileStream file(path, FileStream::EMode::ETruncReadWrite);
 
         // Write headers
         file.write("SKY", 3);
-        file.write((uint32_t)1);
+        file.write((uint32_t)3);
 
         // Write tensor dimensions
         file.write(nb_dims);
 
         size_t tensor_size = 1;
         for (size_t dim = 0; dim < nb_dims; ++dim)
-            tensor_size *=  dim_size[dim];
+            tensor_size *= dim_size[dim];
 
+
+        double* buffer = (double*) calloc(tensor_size, sizeof(double));
 
         // Write reordered shapes
-        file.write(dim_size[2]); // albedo
-        file.write(dim_size[1]); // turbidity
-        file.write(dim_size[0]); // color chanels
-        for (size_t i = 3; i < nb_dims; ++i)
-            file.write(dim_size[i]);
+        file.write(dim_size[ALBEDO]); // albedo
+        file.write(dim_size[TURBIDITY]); // turbidity
+        if (nb_dims == L_DIM) {
+            file.write(dim_size[WAVELENGTH]);
+            file.write(dim_size[CTRL_PT-1]); // control points since it has one dim less
+        } else if (nb_dims == F_DIM) {
+            file.write(dim_size[PARAMS]);
+            file.write(dim_size[WAVELENGTH]);
+            file.write(dim_size[CTRL_PT]);
+        } else {
+            file.close();
+            Throw("Tensor has incompatible dim");
+        }
 
 
-        // data_count = nb of elements once color, albedo and turbidity are set
-        size_t data_count = dataset.nb_dims == 4 ?
-                dim_size[3] :
-                dim_size[3]*dim_size[4];
+        const size_t nb_param = nb_dims == F_DIM ? NB_PARAMS : 1,
+                     nb_colors = dim_size[WAVELENGTH];
 
+        // Converts from (11 x 2 x 10 x ... x 6) to (2 x 10 x ... x 11 x 6)
+        // Let the cache butchering start
+        for (size_t a = 0; a < 2; ++a) {
+            size_t a_offset = a * (NB_TURBIDITY * NB_CTRL_PT * nb_param * nb_colors);
 
-        size_t nb_colors = dim_size[0];
-        double* buffer = (double*)calloc(tensor_size, sizeof(double));
+            for (size_t t = 0; t < NB_TURBIDITY; ++t) {
+                size_t t_offset = t * (NB_CTRL_PT * nb_param * nb_colors);
 
-        // Converts from (11 x 10 x 2 x ... x 6) to (2 x 10 x 11 x ... x 6)
-        for (size_t a = 0; a<2; ++a) {
-            for (size_t t = 0; t<10; ++t) {
-                for (size_t lbda = 0; lbda<nb_colors; ++lbda) {
-                    size_t mem_offset = a * (10 * nb_colors * data_count) +
-                                        t * (nb_colors * data_count) +
-                                        lbda * data_count;
+                for (size_t param_idx = 0; param_idx < nb_param; ++param_idx) {
+                    size_t param_offset = param_idx * NB_CTRL_PT * nb_colors;
 
-                    memcpy(buffer + mem_offset,
-                           p_dataset[lbda] + a*(10*data_count) + t*data_count,
-                           data_count*sizeof(double));
+                    for (size_t color_idx = 0; color_idx < nb_colors; ++color_idx) {
+                        size_t dest_global_offset = a_offset + t_offset + param_offset + color_idx * NB_CTRL_PT,
+                               src_global_offset  = a * (NB_TURBIDITY * NB_CTRL_PT * nb_param) + t * (nb_param * NB_CTRL_PT) + param_idx * NB_CTRL_PT;
+
+                        memcpy(buffer + dest_global_offset,
+                               p_dataset[color_idx] + src_global_offset,
+                               NB_CTRL_PT * sizeof(double));
+
+                    }
+
                 }
+
             }
+
         }
 
         // Write the data from the dataset
@@ -210,9 +229,13 @@ NAMESPACE_BEGIN(mitsuba)
         file.close();
     }
 
-    void write_sky_model_data_v1(const std::string &path) {
-        write_tensor_data_v1(path + ".bin", f_spectral);
-        write_tensor_data_v1(path + ".rad.bin", l_spectral);
+    void write_sky_model_data_v3(const std::string &path) {
+        write_tensor_data_v3(path + "_v3_spec.bin", f_spectral);
+        write_tensor_data_v3(path + "_v3_spec_rad.bin", l_spectral);
+        write_tensor_data_v3(path + "_v3_rgb.bin", f_RGB);
+        write_tensor_data_v3(path + "_v3_rgb_rad.bin", l_RGB);
+        write_tensor_data_v3(path + "_v3_xyz.bin", f_XYZ);
+        write_tensor_data_v3(path + "_v3_xyz_rad.bin", l_XYZ);
     }
 
     void write_tensor_data_v0(const std::string &path, const Dataset& dataset) {
@@ -239,10 +262,13 @@ NAMESPACE_BEGIN(mitsuba)
     }
 
     void write_sky_model_data_v0(const std::string &path) {
-        write_tensor_data_v0(path + ".bin", f_spectral);
-        write_tensor_data_v0(path + ".rad.bin", l_spectral);
+        write_tensor_data_v0(path + "_v0_spec.bin", f_spectral);
+        write_tensor_data_v0(path + "_v0_spec_rad.bin", l_spectral);
+        write_tensor_data_v0(path + "_v0_rgb.bin", f_RGB);
+        write_tensor_data_v0(path + "_v0_rgb_rad.bin", l_RGB);
+        write_tensor_data_v0(path + "_v0_xyz.bin", f_XYZ);
+        write_tensor_data_v0(path + "_v0_xyz_rad.bin", l_XYZ);
     }
-
 
 
 
@@ -250,7 +276,6 @@ NAMESPACE_BEGIN(mitsuba)
     auto tensor_from_file(const std::string &path) {
         using FloatStorage  = DynamicBuffer<Float>;
         using DoubleStorage = dr::float64_array_t<FloatStorage>;
-        //using DoubleStorage = dr::float64_array_t<double>;
         using TensorXf      = dr::Tensor<FloatStorage>;
 
         FileStream file(path, FileStream::EMode::ERead);
