@@ -238,6 +238,75 @@ NAMESPACE_BEGIN(mitsuba)
         write_tensor_data_v3(path + "_v3_xyz_rad.bin", l_XYZ);
     }
 
+    void write_tensor_data_v1(const std::string &path, const Dataset& dataset) {
+        const auto [nb_dims, dim_size, p_dataset] = dataset;
+        FileStream file(path, FileStream::EMode::ETruncReadWrite);
+
+        // Write headers
+        file.write("SKY", 3);
+        file.write((uint32_t)1);
+
+        // Write tensor dimensions
+        file.write(nb_dims);
+
+        size_t tensor_size = 1;
+        for (size_t dim = 0; dim < nb_dims; ++dim)
+            tensor_size *=  dim_size[dim];
+
+
+        // Write reordered shapes
+        file.write(dim_size[ALBEDO]);
+        file.write(dim_size[TURBIDITY]);
+        file.write(dim_size[WAVELENGTH]);
+
+        if (nb_dims == F_DIM) {
+            file.write(dim_size[PARAMS]);
+            file.write(dim_size[CTRL_PT]);
+        } else if (nb_dims == L_DIM) {
+            file.write(dim_size[CTRL_PT - 1]);
+        } else {
+            Throw("Incorect number of dimmensions");
+        }
+
+        // nb_data = nb of elements once color, albedo and turbidity are set
+        const size_t nb_data  = (nb_dims == F_DIM ? NB_PARAMS : 1) * NB_CTRL_PT,
+                     nb_colors = dim_size[WAVELENGTH];
+
+        double* buffer = (double*)calloc(tensor_size, sizeof(double));
+
+        // Converts from (11 x 10 x 2 x ... x 6) to (2 x 10 x 11 x ... x 6)
+        for (size_t a = 0; a < 2; ++a) {
+            size_t a_offset = a * (NB_TURBIDITY * nb_colors * nb_data);
+
+            for (size_t t = 0; t < NB_TURBIDITY; ++t) {
+                size_t t_offset = t * (nb_colors * nb_data);
+
+                for (size_t lbda = 0; lbda < nb_colors; ++lbda) {
+                    size_t mem_offset = a_offset + t_offset + lbda * nb_data;
+
+                    memcpy(buffer + mem_offset,
+                           p_dataset[lbda] + a * (NB_TURBIDITY * nb_data) + t * nb_data,
+                           nb_data * sizeof(double));
+                }
+            }
+        }
+
+        // Write the data from the dataset
+        file.write_array(buffer, tensor_size);
+
+        free(buffer);
+        file.close();
+    }
+
+    void write_sky_model_data_v1(const std::string &path) {
+        write_tensor_data_v1(path + "_v1_spec.bin", f_spectral);
+        write_tensor_data_v1(path + "_v1_spec_rad.bin", l_spectral);
+        write_tensor_data_v1(path + "_v1_rgb.bin", f_RGB);
+        write_tensor_data_v1(path + "_v1_rgb_rad.bin", l_RGB);
+        write_tensor_data_v1(path + "_v1_xyz.bin", f_XYZ);
+        write_tensor_data_v1(path + "_v1_xyz_rad.bin", l_XYZ);
+    }
+
     void write_tensor_data_v0(const std::string &path, const Dataset& dataset) {
         const auto [nb_dims, dim_size, p_dataset] = dataset;
         FileStream file(path, FileStream::EMode::ETruncReadWrite);
