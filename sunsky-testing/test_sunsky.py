@@ -2,14 +2,17 @@ import sys
 sys.path.insert(0, "build/python")
 
 import numpy as np
+import drjit as dr
 import mitsuba as mi
 
 mi.set_variant("llvm_ad_spectral")
 
-from sunsky_plugin import *
-from sunsky_data import *
+from sunsky_data import get_params, get_rad
+from test_plugin import ConstantEmitter
+from sunsky_plugin import SunskyEmitter
 
 mi.register_emitter("sunsky_emitter", lambda props: SunskyEmitter(props))
+mi.register_emitter("constant_emitter", lambda props: ConstantEmitter(props))
 
 
 def test_mean_radiance_data():
@@ -66,6 +69,9 @@ def test_compute():
     params = get_params(dataset, solar_elevation, t, a)
     mean_radiance = get_params(dataset_rad, solar_elevation, t, a)
 
+    dr.assert_true(params.shape == (3, 9), "Parameters are not of the right shape")
+    dr.assert_true(mean_radiance.shape == (3,), "Mean radiance is not of the right shape")
+
 
     # Compute angles for testing
     phi, thetas = dr.meshgrid(
@@ -80,8 +86,6 @@ def test_compute():
     sun_dir = mi.Vector3f(dr.sin(solar_elevation), 0, dr.cos(solar_elevation))
 
     gammas = dr.safe_acos(dr.dot(view_dir, sun_dir))
-
-    dr.print(mean_radiance)
 
     res = [get_rad(params[i], thetas, gammas) * mean_radiance[i] for i in range(params.shape[0])]
     res = np.stack([dr.reshape(mi.TensorXf, channel, (H, W)) for channel in res]).transpose((1,2,0))
@@ -107,7 +111,7 @@ spectrum_dicts = {
 
 def create_emitter_and_spectrum(s_key='d65'):
     emitter = mi.load_dict({
-        "type" : "sunsky_emitter",
+        "type" : "constant_emitter",
         "radiance" : spectrum_dicts[s_key]
     })
     spectrum = mi.load_dict(spectrum_dicts[s_key])
@@ -119,11 +123,11 @@ def create_emitter_and_spectrum(s_key='d65'):
 
 def chi2_test(variants_vec_spectral, spectrum_key):
     sse_dict = {
-        'type' : 'sunsky_emitter',
+        'type' : 'constant_emitter',
         'radiance' : spectrum_dicts[spectrum_key]
     }
 
-    sample_func, pdf_func = mi.chi2.EmitterAdapter("sunsky_emitter", sse_dict)
+    sample_func, pdf_func = mi.chi2.EmitterAdapter("constant_emitter", sse_dict)
     chi2 = mi.chi2.ChiSquareTest(
         domain = mi.chi2.SphericalDomain(),
         sample_func = sample_func,
@@ -137,6 +141,8 @@ def chi2_test(variants_vec_spectral, spectrum_key):
 
 
 if __name__ == "__main__":
+    chi2_test(None, 'd65')
+
     mi.write_sky_model_data_v1("sunsky-testing/res/ssm_dataset")
     test_mean_radiance_data()
     test_radiance_data()

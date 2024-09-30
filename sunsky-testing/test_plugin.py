@@ -1,9 +1,7 @@
 import drjit as dr
 import mitsuba as mi
 
-from sunsky_data import get_params, get_rad
-
-class SunskyEmitter(mi.Emitter):
+class ConstantEmitter(mi.Emitter):
 
     def __init__(self, props):
         super().__init__(props)
@@ -14,18 +12,7 @@ class SunskyEmitter(mi.Emitter):
         self.m_radiance: mi.Texture = props.get("radiance")
         dr.assert_false(self.m_radiance.is_spatially_varying())
 
-        sun_elevation = props.get("sun_elevation", dr.pi / 6)
-        albedo = props.get("albedo", 0.5)
-        turb = props.get("turbidity", 6)
-
-        dataset_name = props.get("dataset_name", "sunsky-testing/res/ssm_dataset_v1_rgb")
-        dataset = mi.tensor_from_file(dataset_name + ".bin")
-        dataset_rad = mi.tensor_from_file(dataset_name + "_rad.bin")
-
-        self.m_params = get_params(dataset, sun_elevation, turb, albedo)
-        self.m_rad = get_params(dataset_rad, sun_elevation, turb, albedo)
-
-        self.m_flags = mi.EmitterFlags.Infinite | mi.EmitterFlags.SpatiallyVarying
+        self.m_flags = mi.EmitterFlags.Infinite
 
     def set_scene(self, scene):
         if scene.bbox().valid():
@@ -35,8 +22,8 @@ class SunskyEmitter(mi.Emitter):
                 mi.Float(self.m_bsphere.radius * (1 + mi.math.RayEpsilon)))
         else:
             self.m_bsphere.radius = mi.BoundingSphere3f(
-                                            mi.Point3f(0),
-                                            mi.Float(mi.math.RayEpsilon))
+                mi.Point3f(0),
+                mi.Float(mi.math.RayEpsilon))
 
         self.m_surface_area = 4.0 * dr.pi * self.m_bsphere.radius**2
 
