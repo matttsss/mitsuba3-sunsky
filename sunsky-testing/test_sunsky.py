@@ -2,14 +2,17 @@ import sys
 sys.path.insert(0, "build/python")
 
 import numpy as np
+import drjit as dr
 import mitsuba as mi
 
 mi.set_variant("llvm_ad_spectral")
 
-from sunsky_plugin import *
-from sunsky_data import *
+from sunsky_data import get_params, get_rad
+from test_plugin import ConstantEmitter
+from sunsky_plugin import SunskyEmitter
 
 mi.register_emitter("sunsky_emitter", lambda props: SunskyEmitter(props))
+mi.register_emitter("constant_emitter", lambda props: ConstantEmitter(props))
 
 
 def test_mean_radiance_data():
@@ -17,11 +20,11 @@ def test_mean_radiance_data():
 
     # Control points for mean radiance at a = 0, t = 2, lbda = 0
     expected = mi.Float(9.160628e-004, 2.599956e-004, 5.466998e-003, -1.503537e-002, 7.200167e-002, 5.387713e-002)
-    dr.allclose(expected, dataset_rad[0, 1, 0])
+    dr.assert_true(dr.allclose(expected, dataset_rad[0, 1, 0]), "Incorrect values for mean radiance (a=0, t=2, lbda=0)")
 
     # Control points for mean radiance at a = 1, t = 6, lbda = 5
     expected = mi.Float(1.245635e-002, 2.874175e-002, -6.384005e-002, 2.429023e-001, 2.428387e-001, 2.418906e-001,)
-    dr.allclose(expected, dataset_rad[1, 5, 5])
+    dr.assert_true(dr.allclose(expected, dataset_rad[1, 5, 5]), "Incorrect values for mean radiance (a=1, t=6, lbda=5)")
 
 def test_radiance_data():
     dataset: mi.TensorXf = mi.tensor_from_file("sunsky-testing/res/ssm_dataset_v1_spec.bin")
@@ -37,7 +40,8 @@ def test_radiance_data():
                         -4.089673e-003, 3.335089e-001, 6.827164e-001, -1.280108e+000, -1.013716e+000, 5.577676e-001,
                         9.539205e-004, -4.934956e+000, 2.642883e-001, 1.005169e-002, 9.265844e-001, 4.999698e-001)
 
-    dr.allclose(expected, dr.unravel(mi.Float, mi.Float(dataset[0, 1, 0]), "C"))
+    dr.assert_true(dr.allclose(expected, dr.unravel(mi.Float, mi.Float(dataset[0, 1, 0]), "C")),
+                   "Incorrect values for radiance (a=0, t=2, lbda=0)")
 
     # Control points for radiance at a = 1, t = 6, lbda = 5
     expected = mi.Float(-1.330626e+000, -4.272516e-001, -1.317682e+000, 1.650847e+000, -1.192771e-001, 4.904191e-001,
@@ -50,7 +54,8 @@ def test_radiance_data():
                         -3.239225e-001, 3.899425e+000, 1.179264e+000, -1.106228e+000, -1.927917e-001, 1.179701e+000,
                         2.379834e+001, -4.870211e+000, -1.290713e+000, 2.854422e-001, 2.078973e+000, 5.128625e-001)
 
-    dr.allclose(expected, dr.unravel(mi.Float, mi.Float(dataset[1, 5, 5]), "C"))
+    dr.assert_true(dr.allclose(expected, dr.unravel(mi.Float, mi.Float(dataset[1, 5, 5]), "C")),
+                   "Incorrect values for radiance (a=1, t=6, lbda=5)")
 
 def test_compute():
     dataset_rad: mi.TensorXf = mi.tensor_from_file("sunsky-testing/res/ssm_dataset_v1_rgb_rad.bin")
@@ -66,6 +71,9 @@ def test_compute():
     params = get_params(dataset, solar_elevation, t, a)
     mean_radiance = get_params(dataset_rad, solar_elevation, t, a)
 
+    dr.assert_true(params.shape == (3, 9), "Parameters are not of the right shape")
+    dr.assert_true(mean_radiance.shape == (3,), "Mean radiance is not of the right shape")
+
 
     # Compute angles for testing
     phi, thetas = dr.meshgrid(
@@ -80,8 +88,6 @@ def test_compute():
     sun_dir = mi.Vector3f(dr.sin(solar_elevation), 0, dr.cos(solar_elevation))
 
     gammas = dr.safe_acos(dr.dot(view_dir, sun_dir))
-
-    dr.print(mean_radiance)
 
     res = [get_rad(params[i], thetas, gammas) * mean_radiance[i] for i in range(params.shape[0])]
     res = np.stack([dr.reshape(mi.TensorXf, channel, (H, W)) for channel in res]).transpose((1,2,0))
@@ -107,7 +113,7 @@ spectrum_dicts = {
 
 def create_emitter_and_spectrum(s_key='d65'):
     emitter = mi.load_dict({
-        "type" : "sunsky_emitter",
+        "type" : "constant_emitter",
         "radiance" : spectrum_dicts[s_key]
     })
     spectrum = mi.load_dict(spectrum_dicts[s_key])
@@ -119,11 +125,11 @@ def create_emitter_and_spectrum(s_key='d65'):
 
 def chi2_test(variants_vec_spectral, spectrum_key):
     sse_dict = {
-        'type' : 'sunsky_emitter',
+        'type' : 'constant_emitter',
         'radiance' : spectrum_dicts[spectrum_key]
     }
 
-    sample_func, pdf_func = mi.chi2.EmitterAdapter("sunsky_emitter", sse_dict)
+    sample_func, pdf_func = mi.chi2.EmitterAdapter("constant_emitter", sse_dict)
     chi2 = mi.chi2.ChiSquareTest(
         domain = mi.chi2.SphericalDomain(),
         sample_func = sample_func,
@@ -137,6 +143,8 @@ def chi2_test(variants_vec_spectral, spectrum_key):
 
 
 if __name__ == "__main__":
+    chi2_test(None, 'd65')
+
     mi.write_sky_model_data_v1("sunsky-testing/res/ssm_dataset")
     test_mean_radiance_data()
     test_radiance_data()
