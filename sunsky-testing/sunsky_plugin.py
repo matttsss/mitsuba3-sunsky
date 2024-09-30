@@ -1,8 +1,6 @@
 import drjit as dr
 import mitsuba as mi
 
-mi.register_emitter("sunsky_emitter", lambda props: SunskyEmitter(props))
-
 class SunskyEmitter(mi.Emitter):
 
     def __init__(self, props):
@@ -14,7 +12,13 @@ class SunskyEmitter(mi.Emitter):
         self.m_radiance: mi.Texture = props.get("radiance")
         dr.assert_false(self.m_radiance.is_spatially_varying())
 
-        self.m_flags = mi.EmitterFlags.Infinite
+        sun_elevation = props.get("sun_elevation", dr.pi / 6)
+        albedo = props.get("albedo", 0.5)
+        turb = props.get("turbidity", 6)
+
+
+
+        self.m_flags = mi.EmitterFlags.Infinite | mi.EmitterFlags.SpatiallyVarying
 
     def set_scene(self, scene):
         if scene.bbox().valid():
@@ -27,7 +31,7 @@ class SunskyEmitter(mi.Emitter):
                                             mi.Point3f(0),
                                             mi.Float(mi.math.RayEpsilon))
 
-        self.m_surface_area *= self.m_bsphere.radius**2
+        self.m_surface_area = 4.0 * dr.pi * self.m_bsphere.radius**2
 
     def eval(self, si, active=True):
         return mi.depolarizer(self.m_radiance.eval(si, active))
