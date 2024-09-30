@@ -134,8 +134,8 @@ def test_compute():
     # Set test parameters
     W, H = (256*4, 256)
 
-    t, a = 1, 0
-    solar_elevation = (dr.pi / 2) * 45 / 100
+    t, a = 6, 0.5
+    solar_elevation = (dr.pi / 2) * 15 / 100
 
     # Compute coefficients
     params = get_params(dataset, solar_elevation, t, a)
@@ -145,7 +145,7 @@ def test_compute():
     # Compute angles for testing
     phi, thetas = dr.meshgrid(
         dr.linspace(mi.Float, -dr.pi, dr.pi, W),
-        dr.linspace(mi.Float, (dr.pi / 2) * 95/100, 0, H)
+        dr.linspace(mi.Float, dr.pi / 2, 0, H)
     )
 
     st, ct = dr.sincos(thetas)
@@ -159,11 +159,9 @@ def test_compute():
     dr.print(mean_radiance)
 
     res = [get_rad(params[i], thetas, gammas) * mean_radiance[i] for i in range(params.shape[0])]
+    res = np.stack([dr.reshape(mi.TensorXf, channel, (H, W)) for channel in res]).transpose((1,2,0))
 
-
-
-    res = np.stack([channel.numpy().reshape((H, W)) for channel in res]).transpose((1,2,0))
-    mi.util.write_bitmap("my_first_render.exr", res)
+    mi.util.write_bitmap("sunsky-testing/res/latlong_test.exr", res)
 
 
 
