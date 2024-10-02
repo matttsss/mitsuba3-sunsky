@@ -8,9 +8,10 @@ import matplotlib.pyplot as plt
 
 mi.set_variant("cuda_ad_spectral")
 
-from sunsky_data import get_params, get_rad
+from sunsky_data import get_params, get_rad, get_sun
 from test_plugin import ConstantEmitter
 from sunsky_plugin import SunskyEmitter
+from helpers import get_camera_rays, get_north_hemisphere_rays
 
 mi.register_emitter("sunsky_emitter", lambda props: SunskyEmitter(props))
 mi.register_emitter("constant_emitter", lambda props: ConstantEmitter(props))
@@ -68,22 +69,25 @@ def test_render(dataset, dataset_rad, shape, t, a, eta):
     params = get_params(dataset, eta, t, a)
     mean_radiance = get_params(dataset_rad, eta, t, a)
 
-    # Compute angles for testing
-    phi, thetas = dr.meshgrid(
-        dr.linspace(mi.Float, -dr.pi, dr.pi, shape[1]),
-        dr.linspace(mi.Float, 0, dr.pi / 2, shape[0])
-    )
-
-    st, ct = dr.sincos(thetas)
-    sp, cp = dr.sincos(phi)
-    view_dir = mi.Vector3f(cp * st, sp * st, ct)
-
+    # Get rays
+    view_dir, thetas = get_north_hemisphere_rays(shape, True)
     sun_dir = mi.Vector3f(dr.sin(eta), 0, dr.cos(eta))
 
     gammas = dr.safe_acos(dr.dot(view_dir, sun_dir))
 
     res = [get_rad(params[i], thetas, gammas) * mean_radiance[i] for i in range(params.shape[0])]
     return [dr.reshape(mi.TensorXf, channel, shape) for channel in res]
+
+def render_sun():
+    resolution = (1024, 1024*4)
+    view_dir = get_north_hemisphere_rays(resolution)
+
+    eta = 0.5 * dr.pi * 2/100
+
+    sun_dir = mi.Vector3f(dr.cos(eta), 0, dr.sin(eta))
+
+    res = dr.reshape(mi.TensorXf, get_sun(sun_dir, view_dir, dr.pi/5, 0.1, 1e-2), resolution)
+    mi.util.write_bitmap(f"sunsky-testing/res/renders/sun_test.exr", res)
 
 
 def render_suite():
@@ -132,10 +136,11 @@ def test_plot_spectral():
 
 
 if __name__ == "__main__":
-    mi.write_sky_model_data_v1("sunsky-testing/res/datasets/ssm_dataset")
+    #mi.write_sky_model_data_v1("sunsky-testing/res/datasets/ssm_dataset")
 
     test_mean_radiance_data()
     test_radiance_data()
     #test_plot_spectral()
     render_suite()
+    render_sun()
 

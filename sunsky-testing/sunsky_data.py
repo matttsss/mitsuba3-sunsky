@@ -62,6 +62,16 @@ def get_params(database: mi.TensorXf, eta: mi.Float, t: mi.Int | mi.Float, a: mi
     if dr.is_integral_v(t) and dr.is_integral_v(a):
         return bezier_interpolate(database[a, t], x)
 
+def get_sun(sun_dir, view_dir, sun_radii, sun_dropoff, horizon_dropoff):
+    def smoothstep(x):
+        x = dr.clip(x, 0, 1)
+        return 3 * x**2 - 2 * x**3
+
+    theta = dr.acos(mi.Frame3f(mi.Vector3f(0, 0, 1)).cos_theta(view_dir))
+    eta = dr.acos(dr.dot(sun_dir, view_dir))
+
+    return smoothstep((eta - 0.5 * sun_radii) / -sun_dropoff) * smoothstep((theta - 0.5 * dr.pi) / -horizon_dropoff)
+
 def get_rad(coefs: mi.TensorXf, theta: mi.Float, gamma: mi.Float) -> mi.Float:
     cos_theta = dr.cos(theta)
     cos_gamma = dr.cos(gamma)
