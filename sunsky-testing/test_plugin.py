@@ -17,13 +17,11 @@ class ConstantEmitter(mi.Emitter):
     def set_scene(self, scene):
         if scene.bbox().valid():
             self.m_bsphere = scene.bbox().bounding_sphere()
-            self.m_bsphere.radius = dr.max(
-                mi.Float(mi.math.RayEpsilon),
-                mi.Float(self.m_bsphere.radius * (1 + mi.math.RayEpsilon)))
+            self.m_bsphere.radius = dr.maximum(
+                mi.math.RayEpsilon,
+                self.m_bsphere.radius * (1 + mi.math.RayEpsilon))
         else:
-            self.m_bsphere.radius = mi.BoundingSphere3f(
-                mi.Point3f(0),
-                mi.Float(mi.math.RayEpsilon))
+            self.m_bsphere.radius = mi.BoundingSphere3f(0, mi.math.RayEpsilon)
 
         self.m_surface_area = 4.0 * dr.pi * self.m_bsphere.radius**2
 

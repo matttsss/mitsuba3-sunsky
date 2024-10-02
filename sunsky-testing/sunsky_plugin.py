@@ -1,7 +1,7 @@
 import drjit as dr
 import mitsuba as mi
 
-from sunsky_data import get_params, get_rad
+from sunsky_data import get_params
 
 class SunskyEmitter(mi.Emitter):
 
@@ -14,33 +14,55 @@ class SunskyEmitter(mi.Emitter):
         self.m_radiance: mi.Texture = props.get("radiance")
         dr.assert_false(self.m_radiance.is_spatially_varying())
 
-        sun_elevation = props.get("sun_elevation", dr.pi / 6)
-        albedo = props.get("albedo", 0.5)
-        turb = props.get("turbidity", 6)
+        self.m_sun_dir = dr.normalize(props.get("sun_dir", mi.Vector3f(dr.sin(dr.pi/5), 0, dr.cos(dr.pi/5))))
+        self.m_albedo = props.get("albedo", 0.5)
+        self.m_turb = props.get("turbidity", 6)
 
         dataset_name = props.get("dataset_name", "sunsky-testing/res/ssm_dataset_v1_rgb")
         dataset = mi.tensor_from_file(dataset_name + ".bin")
         dataset_rad = mi.tensor_from_file(dataset_name + "_rad.bin")
 
-        self.m_params = get_params(dataset, sun_elevation, turb, albedo)
-        self.m_rad = get_params(dataset_rad, sun_elevation, turb, albedo)
+
+        self.m_up_frame = mi.Frame3f(mi.Vector3f(0, 0, 1))
+        sun_elevation = dr.pi/2 - dr.acos(self.m_up_frame.cos_theta(self.m_sun_dir))
+
+        self.m_params = get_params(dataset, sun_elevation, self.m_turb, self.m_albedo)
+        self.m_rad: mi.Float = get_params(dataset_rad, sun_elevation, self.m_turb, self.m_albedo)
 
         self.m_flags = mi.EmitterFlags.Infinite | mi.EmitterFlags.SpatiallyVarying
 
     def set_scene(self, scene):
         if scene.bbox().valid():
             self.m_bsphere = scene.bbox().bounding_sphere()
-            self.m_bsphere.radius = dr.max(
-                mi.Float(mi.math.RayEpsilon),
-                mi.Float(self.m_bsphere.radius * (1 + mi.math.RayEpsilon)))
+            self.m_bsphere.radius = dr.maximum(
+                mi.math.RayEpsilon,
+                self.m_bsphere.radius * (1 + mi.math.RayEpsilon))
         else:
-            self.m_bsphere.radius = mi.BoundingSphere3f(
-                                            mi.Point3f(0),
-                                            mi.Float(mi.math.RayEpsilon))
+            self.m_bsphere.radius = mi.BoundingSphere3f(0, mi.math.RayEpsilon)
 
         self.m_surface_area = 4.0 * dr.pi * self.m_bsphere.radius**2
 
+    @dr.syntax
     def eval(self, si, active=True):
+        cos_gamma = dr.dot(si.wi, self.m_sun_dir)
+        cos_gamma_sqr = cos_gamma ** 2
+        cos_theta = self.m_up_frame.cos_theta(si.wi)
+
+        nb_colors = len(self.m_rad)
+        res = dr.zeros(mi.Float, nb_colors)
+
+        i = 0
+        while active and cos_theta > 0 and (i < nb_colors):
+            A, B, C, D, E, F, G, H, I = self.m_params[i]
+
+            c1 = 1 + A * dr.exp(B / (cos_theta + 0.01))
+            chi = (1 + cos_gamma_sqr) / dr.power(1 + dr.square(H) - 2 * H * cos_gamma, 1.5)
+            c2 = C + D * dr.exp(E * dr.acos(cos_gamma)) + F * cos_gamma_sqr + G * chi + I * dr.safe_sqrt(cos_theta)
+
+            res[i] = c1 * c2
+            i += 1
+
+        # TODO construct spectrum
         return mi.depolarizer(self.m_radiance.eval(si, active))
 
     def sample_ray(self, time, wavelength_sample, sample_2, sample_3, active=True):
@@ -104,7 +126,9 @@ class SunskyEmitter(mi.Emitter):
 
 
     def traverse(self, callback):
-        callback.put_parameter('radiance', self.m_radiance, mi.ParamFlags.Differentiable)
+        callback.put_parameter('sun_dir', self.m_sun_dir)
+        callback.put_parameter('albedo', self.m_albedo)
+        callback.put_parameter('turbidity', self.m_turb)
 
     def is_environment(self):
         return True

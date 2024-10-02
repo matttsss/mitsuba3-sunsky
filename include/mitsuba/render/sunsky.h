@@ -274,7 +274,7 @@ NAMESPACE_BEGIN(mitsuba)
 
         double* buffer = (double*)calloc(tensor_size, sizeof(double));
 
-        // Converts from (11 x 10 x 2 x ... x 6) to (2 x 10 x 11 x ... x 6)
+        // Converts from (11 x 2 x 10 x 6 x ...) to (2 x 10 x 11 x ... x 6)
         for (size_t a = 0; a < 2; ++a) {
             size_t dest_a_offset = a * (NB_TURBIDITY * nb_colors * nb_params * NB_CTRL_PT),
                    src_a_offset  = a * (NB_TURBIDITY * NB_CTRL_PT * nb_params);

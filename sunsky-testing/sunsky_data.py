@@ -18,9 +18,9 @@ def bezier_interpolate(data: mi.TensorXf, x: mi.Float):
     return dr.sum(coefs * data, axis=data.ndim - 1)
 
 
-def get_params(database: mi.TensorXf, eta: mi.Float, t: mi.Int | mi.Float, a: mi.Int | mi.Float):
+def get_params(database: mi.TensorXf, eta: mi.Float, t: mi.Int | mi.Float, a: mi.Int | mi.Float) -> mi.TensorXf:
     dr.assert_true(database.shape[0] == 2 and database.shape[1] == 10, "Sky model dataset is not not of the right shape")
-    dr.assert_true(0 <= eta < 0.5 * dr.pi, "Sun elevation is not between 0 and %f (pi/2): %f", (dr.pi/2, eta))
+    dr.assert_true(0 <= eta <= 0.5 * dr.pi, "Sun elevation is not between 0 and %f (pi/2): %f", (dr.pi/2, eta))
     dr.assert_true(0 <= a <= 1, "Albedo (a) value is not between 0 and 1: %f", a)
     dr.assert_true(1 <= t <= 10, "Turbidity value is not between 0 and 10: %f", t)
 
@@ -62,12 +62,12 @@ def get_params(database: mi.TensorXf, eta: mi.Float, t: mi.Int | mi.Float, a: mi
     if dr.is_integral_v(t) and dr.is_integral_v(a):
         return bezier_interpolate(database[a, t], x)
 
-def get_rad(coefs: mi.TensorXf, theta: mi.Float, gamma: mi.Float):
+def get_rad(coefs: mi.TensorXf, theta: mi.Float, gamma: mi.Float) -> mi.Float:
     cos_theta = dr.cos(theta)
     cos_gamma = dr.cos(gamma)
     cos_gamma_sqr = dr.square(cos_gamma)
 
-    A, B, C, D, E, F, G, H, I = coefs[0], coefs[1], coefs[2], coefs[3], coefs[4], coefs[5], coefs[6], coefs[7], coefs[8]
+    A, B, C, D, E, F, G, H, I = coefs
 
     c1 = 1 + A * dr.exp(B / (cos_theta + 0.01))
     chi = (1 + cos_gamma_sqr) / dr.power(1 + dr.square(H) - 2 * H * cos_gamma, 1.5)

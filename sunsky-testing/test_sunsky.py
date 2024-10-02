@@ -4,8 +4,9 @@ sys.path.insert(0, "build/python")
 import numpy as np
 import drjit as dr
 import mitsuba as mi
+import matplotlib.pyplot as plt
 
-mi.set_variant("llvm_ad_spectral")
+mi.set_variant("cuda_ad_spectral")
 
 from sunsky_data import get_params, get_rad
 from test_plugin import ConstantEmitter
@@ -16,7 +17,9 @@ mi.register_emitter("constant_emitter", lambda props: ConstantEmitter(props))
 
 
 def test_mean_radiance_data():
-    dataset_rad: mi.TensorXf = mi.tensor_from_file("sunsky-testing/res/ssm_dataset_v1_spec_rad.bin")
+    dr.print("Testing mean radiance values")
+
+    dataset_rad: mi.TensorXf = mi.tensor_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_spec_rad.bin")
 
     # Control points for mean radiance at a = 0, t = 2, lbda = 0
     expected = mi.Float(9.160628e-004, 2.599956e-004, 5.466998e-003, -1.503537e-002, 7.200167e-002, 5.387713e-002)
@@ -27,7 +30,9 @@ def test_mean_radiance_data():
     dr.assert_true(dr.allclose(expected, dataset_rad[1, 5, 5]), "Incorrect values for mean radiance (a=1, t=6, lbda=5)")
 
 def test_radiance_data():
-    dataset: mi.TensorXf = mi.tensor_from_file("sunsky-testing/res/ssm_dataset_v1_spec.bin")
+    dr.print("Testing radiance values")
+
+    dataset: mi.TensorXf = mi.tensor_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_spec.bin")
 
     # Control points for radiance at a = 0, t = 2, lbda = 0
     expected = mi.Float(-1.298333e+001, -3.775577e+000, -5.173531e+000, 5.316518e+000, -2.572615e-002, 1.516601e-001,
@@ -57,96 +62,80 @@ def test_radiance_data():
     dr.assert_true(dr.allclose(expected, dr.unravel(mi.Float, mi.Float(dataset[1, 5, 5]), "C")),
                    "Incorrect values for radiance (a=1, t=6, lbda=5)")
 
-def test_compute():
-    dataset_rad: mi.TensorXf = mi.tensor_from_file("sunsky-testing/res/ssm_dataset_v1_rgb_rad.bin")
-    dataset: mi.TensorXf = mi.tensor_from_file("sunsky-testing/res/ssm_dataset_v1_rgb.bin")
-
-    # Set test parameters
-    W, H = (256*4, 256)
-
-    t, a = 6, 0.5
-    solar_elevation = (dr.pi / 2) * 15 / 100
+def test_render(dataset, dataset_rad, shape, t, a, eta):
 
     # Compute coefficients
-    params = get_params(dataset, solar_elevation, t, a)
-    mean_radiance = get_params(dataset_rad, solar_elevation, t, a)
-
-    dr.assert_true(params.shape == (3, 9), "Parameters are not of the right shape")
-    dr.assert_true(mean_radiance.shape == (3,), "Mean radiance is not of the right shape")
-
+    params = get_params(dataset, eta, t, a)
+    mean_radiance = get_params(dataset_rad, eta, t, a)
 
     # Compute angles for testing
     phi, thetas = dr.meshgrid(
-        dr.linspace(mi.Float, -dr.pi, dr.pi, W),
-        dr.linspace(mi.Float, dr.pi / 2, 0, H)
+        dr.linspace(mi.Float, -dr.pi, dr.pi, shape[1]),
+        dr.linspace(mi.Float, 0, dr.pi / 2, shape[0])
     )
 
     st, ct = dr.sincos(thetas)
     sp, cp = dr.sincos(phi)
     view_dir = mi.Vector3f(cp * st, sp * st, ct)
 
-    sun_dir = mi.Vector3f(dr.sin(solar_elevation), 0, dr.cos(solar_elevation))
+    sun_dir = mi.Vector3f(dr.sin(eta), 0, dr.cos(eta))
 
     gammas = dr.safe_acos(dr.dot(view_dir, sun_dir))
 
     res = [get_rad(params[i], thetas, gammas) * mean_radiance[i] for i in range(params.shape[0])]
-    res = np.stack([dr.reshape(mi.TensorXf, channel, (H, W)) for channel in res]).transpose((1,2,0))
-
-    #mi.util.write_bitmap("sunsky-testing/res/latlong_test.exr", res)
+    return [dr.reshape(mi.TensorXf, channel, shape) for channel in res]
 
 
+def render_suite():
+    dataset_rad: mi.TensorXf = mi.tensor_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_rgb_rad.bin")
+    dataset: mi.TensorXf = mi.tensor_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_rgb.bin")
 
+    shape = (256, 256*4)
 
+    r70 = dr.pi/2 * (70/100)
+    r50 = dr.pi/2 * (50/100)
+    r30 = dr.pi/2 * (30/100)
+    r10 = dr.pi/2 * (10/100)
+    r5 = dr.pi/2 * (5/100)
 
+    test_params = [(1, 0.5, r30), (3, 0.2, r30), (3, 0.8, r30), (5, 0, r30), (5, 1, r30), (6, 0.2, r30), (6, 0.5, r30)]
 
-spectrum_dicts = {
-    'd65': {
-        "type": "d65",
-    },
-    'regular': {
-        "type": "regular",
-        "wavelength_min": 500,
-        "wavelength_max": 600,
-        "values": "1, 2"
-    }
-}
+    for (t, a, eta) in test_params:
+        res = np.stack(test_render(dataset, dataset_rad, shape, t, a, eta)).transpose((1,2,0))
+        mi.util.write_bitmap(f"sunsky-testing/res/renders/sm_t{t}_a{a}_eta{int(eta * 2 * dr.inv_pi * 100)}.exr", res)
 
-def create_emitter_and_spectrum(s_key='d65'):
-    emitter = mi.load_dict({
-        "type" : "constant_emitter",
-        "radiance" : spectrum_dicts[s_key]
-    })
-    spectrum = mi.load_dict(spectrum_dicts[s_key])
-    expanded = spectrum.expand()
-    if len(expanded) == 1:
-        spectrum = expanded[0]
+    for eta in [r5, r10, r30, r50, r70]:
+        t, a = 6, 0.5
+        res = np.stack(test_render(dataset, dataset_rad, shape, t, a, eta)).transpose((1,2,0))
+        mi.util.write_bitmap(f"sunsky-testing/res/renders/sm_t{t}_a{a}_eta{int(eta * 2 * dr.inv_pi * 100)}.exr", res)
 
-    return emitter, spectrum
+def test_plot_spectral():
+    wavelengths = [320, 360, 400, 440, 480, 520, 560, 600, 640, 680, 720]
+    dataset_rad: mi.TensorXf = mi.tensor_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_spec_rad.bin")
+    dataset: mi.TensorXf = mi.tensor_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_spec.bin")
 
-def chi2_test(variants_vec_spectral, spectrum_key):
-    sse_dict = {
-        'type' : 'constant_emitter',
-        'radiance' : spectrum_dicts[spectrum_key]
-    }
+    eta, t, a = dr.pi/2 * (30/100), 6, 0.5
 
-    sample_func, pdf_func = mi.chi2.EmitterAdapter("constant_emitter", sse_dict)
-    chi2 = mi.chi2.ChiSquareTest(
-        domain = mi.chi2.SphericalDomain(),
-        sample_func = sample_func,
-        pdf_func = pdf_func
-    )
+    res = test_render(dataset, dataset_rad, (256, 256*3), t, a, eta)
 
-    assert chi2.run()
+    fig, axes = plt.subplots(3, 4)
 
+    for i in range(11):
+        subplot = axes[i//4][i%4]
+        subplot.imshow(res[i], cmap="hot")
+        subplot.axis('off')
+        subplot.set_title(f"{wavelengths[i]}$\\lambda$")
+    fig.delaxes(axes[2][3])
 
-
+    fig.suptitle("Sky model render in different wavelengths")
+    plt.show()
 
 
 if __name__ == "__main__":
-    chi2_test(None, 'd65')
+    mi.write_sky_model_data_v1("sunsky-testing/res/datasets/ssm_dataset")
 
-    mi.write_sky_model_data_v1("sunsky-testing/res/ssm_dataset")
     test_mean_radiance_data()
     test_radiance_data()
-    test_compute()
+    #test_plot_spectral()
+    render_suite()
 
