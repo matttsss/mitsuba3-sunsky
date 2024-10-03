@@ -14,20 +14,22 @@ from sunsky_data import get_params, get_rad, get_sun
 def test_mean_radiance_data():
     dr.print("Testing mean radiance values")
 
-    dataset_rad: mi.TensorXf = mi.tensor_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_spec_rad.bin")
+    rad_shape, dataset_rad = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_spec_rad.bin")
+    dataset = mi.TensorXf(dataset_rad, tuple(rad_shape))
 
     # Control points for mean radiance at a = 0, t = 2, lbda = 0
     expected = mi.Float(9.160628e-004, 2.599956e-004, 5.466998e-003, -1.503537e-002, 7.200167e-002, 5.387713e-002)
-    dr.assert_true(dr.allclose(expected, dataset_rad[0, 1, ::, 0]), "Incorrect values for mean radiance (a=0, t=2, lbda=0)")
+    dr.assert_true(dr.allclose(expected, dataset[0, 1, ::, 0]), "Incorrect values for mean radiance (a=0, t=2, lbda=0)")
 
     # Control points for mean radiance at a = 1, t = 6, lbda = 5
     expected = mi.Float(1.245635e-002, 2.874175e-002, -6.384005e-002, 2.429023e-001, 2.428387e-001, 2.418906e-001,)
-    dr.assert_true(dr.allclose(expected, dataset_rad[1, 5, ::, 5]), "Incorrect values for mean radiance (a=1, t=6, lbda=5)")
+    dr.assert_true(dr.allclose(expected, dataset[1, 5, ::, 5]), "Incorrect values for mean radiance (a=1, t=6, lbda=5)")
 
 def test_radiance_data():
     dr.print("Testing radiance values")
 
-    dataset: mi.TensorXf = mi.tensor_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_spec.bin")
+    shape, dataset = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_spec.bin")
+    dataset = mi.TensorXf(dataset, tuple(shape))
 
     # Control points for radiance at a = 0, t = 2, lbda = 0
     expected = mi.Float(-1.298333e+001, -3.775577e+000, -5.173531e+000, 5.316518e+000, -2.572615e-002, 1.516601e-001,
@@ -69,12 +71,12 @@ def test_render(database: tuple[list[int], mi.Float], database_rad: tuple[list[i
 
     gammas = dr.safe_acos(dr.dot(view_dir, sun_dir))
 
-    res = dr.zeros(mi.TensorXf, (3, render_shape[0], render_shape[1]))
+    res = dr.zeros(mi.TensorXf, (render_shape[0], render_shape[1], 3))
 
     i = 0
     while i < mean_radiance.shape[0]:
         coefs = dr.gather(mi.Float, params, i*9 + dr.arange(mi.UInt32, 9))
-        res[i] = get_rad(coefs, thetas, gammas) * mean_radiance[i]
+        res[::, ::, i] = get_rad(coefs, thetas, gammas) * mean_radiance[i]
         i += 1
 
     return res
@@ -91,8 +93,8 @@ def render_sun():
     mi.util.write_bitmap(f"sunsky-testing/res/renders/sun_test.exr", res)
 
 def render_suite():
-    dataset_rad: mi.TensorXf = mi.tensor_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_rgb_rad.bin")
-    dataset: mi.TensorXf = mi.tensor_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_rgb.bin")
+    database_rad = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_rgb_rad.bin")
+    database = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_rgb.bin")
 
     shape = (256, 256*4)
 
@@ -105,12 +107,12 @@ def render_suite():
     test_params = [(1, 0.5, r30), (3, 0.2, r30), (3, 0.8, r30), (5, 0, r30), (5, 1, r30), (6, 0.2, r30), (6, 0.5, r30)]
 
     for (t, a, eta) in test_params:
-        res = test_render(dataset, dataset_rad, shape, t, a, eta)
+        res = test_render(database, database_rad, shape, t, a, eta)
         mi.util.write_bitmap(f"sunsky-testing/res/renders/sm_t{t}_a{a}_eta{int(eta * 2 * dr.inv_pi * 100)}.exr", res)
 
     for eta in [r5, r10, r30, r50, r70]:
         t, a = 6, 0.5
-        res = test_render(dataset, dataset_rad, shape, t, a, eta)
+        res = test_render(database, database_rad, shape, t, a, eta)
         mi.util.write_bitmap(f"sunsky-testing/res/renders/sm_t{t}_a{a}_eta{int(eta * 2 * dr.inv_pi * 100)}.exr", res)
 
 def test_plot_spectral():
@@ -138,21 +140,21 @@ def test_plot_spectral():
 if __name__ == "__main__":
     #mi.write_sky_model_data_v1("sunsky-testing/res/datasets/ssm_dataset")
 
-    #test_mean_radiance_data()
-    #test_radiance_data()
-    #render_suite()
+    test_mean_radiance_data()
+    test_radiance_data()
+    render_suite()
 
-    database_rad = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_rgb_rad.bin")
-    database = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_rgb.bin")
-
-    render_shape = (256, 256*4)
-
-    dr.kernel_history_clear()
-
-    with dr.scoped_set_flag(dr.JitFlag.KernelHistory):
-        res = test_render(database, database_rad, render_shape, 2, 0.5, dr.pi/4)
-
-    dr.print(dr.kernel_history())
+    #database_rad = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_rgb_rad.bin")
+    #database = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_rgb.bin")
+#
+    #render_shape = (256, 256*4)
+#
+    #dr.kernel_history_clear()
+#
+    #with dr.scoped_set_flag(dr.JitFlag.KernelHistory):
+    #    res = test_render(database, database_rad, render_shape, 2, 0.5, dr.pi/4)
+#
+    #dr.print(dr.kernel_history())
 
 
 
