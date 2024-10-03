@@ -136,8 +136,10 @@ def test_plot_spectral():
 
 
 if __name__ == "__main__":
-    #mi.write_sky_model_data_v1("sunsky-testing/res/datasets/ssm_dataset")
-
+    mi.write_sky_model_data_v1("sunsky-testing/res/datasets/ssm_dataset")
+    shape, array = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_rgb.bin")
+    dr.print(shape)
+    dr.print(len(array))
     test_mean_radiance_data()
     test_radiance_data()
     #test_plot_spectral()
