@@ -23,10 +23,12 @@ def get_rad(coefs: mi.Float, theta: mi.Float, gamma: mi.Float) -> mi.Float:
     return c1 * c2
 
 
-def bezier_interpolate(data: mi.TensorXf, x: mi.Float) -> mi.Float:
+def bezier_interpolate(dataset: mi.Float, block_size: mi.UInt32, offset: mi.UInt32, x: mi.Float) -> mi.Float:
     """
      Interpolates data along a quintic Bézier curve
-    :param data: A tensor of shape [6, C, P]
+    :param dataset: Flat dataset
+    :param block_size: Size of the block (nb_colors * nb_parameters * nb_control_pts)
+    :param offset: Offset to the start of the block
     :param x: belongs to [0, 1], point to interpolate data at
     :return: The interpolated data in flat array of "shape" [C, P]
     """
@@ -34,53 +36,48 @@ def bezier_interpolate(data: mi.TensorXf, x: mi.Float) -> mi.Float:
     coefs  = [1, 5, 10, 10, 5, 1]
     powers = [0, 1, 2, 3, 4, 5]
 
-    res = dr.zeros(mi.Float, dr.prod(data.shape[1:]))
+    # TODO a way to avoid this? arange does not support a mi.UInt32 variant as size
+    inner_block_size = (block_size//6)[0]
+    indices = offset + dr.arange(mi.UInt32, inner_block_size)
+
+    res = dr.zeros(mi.Float, inner_block_size)
     for i in range(6):
-        term = coefs[i] * x**powers[i] * (1 - x)**powers[5-i] * data[i]
-        res += dr.ravel(term, 'C')
+        data = dr.gather(mi.Float, dataset, indices + i * inner_block_size)
+        res += coefs[i] * x**powers[i] * (1 - x)**powers[5-i] * data
 
     return res
 
 
-def get_params(database: mi.TensorXf, eta: mi.Float, t: mi.Int | mi.Float, a: mi.Int | mi.Float) -> mi.TensorXf:
-    dr.assert_true(database.shape[0] == 2 and database.shape[1] == 10, "Sky model dataset is not not of the right shape")
+def get_params(database: mi.Float, shape, t: mi.Int | mi.Float, a: mi.Int | mi.Float, eta: mi.Float) -> mi.TensorXf:
+    dr.assert_true(shape[0] == 2 and shape[1] == 10, "Sky model dataset is not not of the right shape")
     dr.assert_true(0 <= eta <= 0.5 * dr.pi, "Sun elevation is not between 0 and %f (pi/2): %f", (dr.pi/2, eta))
     dr.assert_true(0 <= a <= 1, "Albedo (a) value is not between 0 and 1: %f", a)
     dr.assert_true(1 <= t <= 10, "Turbidity value is not between 0 and 10: %f", t)
 
     x: mi.Float = dr.power(2 * dr.inv_pi * eta, 1/3)
 
-    # Lerp for albedo and turbidity
-    if not dr.is_integral_v(t) and not dr.is_integral_v(a):
-        t_idx_low = mi.Int(dr.floor(t) - 1)
+    t_low = mi.UInt32(dr.floor(t - 1))
 
-        top_start = bezier_interpolate(database[1, t_idx_low]    , x)
-        top_end   = bezier_interpolate(database[1, t_idx_low + 1], x)
-        bot_start = bezier_interpolate(database[0, t_idx_low]    , x)
-        bot_end   = bezier_interpolate(database[0, t_idx_low + 1], x)
+    a_offset_coef = mi.UInt32(dr.prod(shape)) // 2
+    block_size = a_offset_coef // 10 # Size of the data block between two 't' indices
 
-        lerp_a_top = dr.lerp(top_start, top_end, a)
-        lerp_a_bot = dr.lerp(bot_start, bot_end, a)
+    # TODO condense lerps in while loop
 
-        return dr.lerp(lerp_a_bot, lerp_a_top, t - dr.floor(t))
+    # Lerp on t_low
+    t_offset = t_low * block_size
+    start = bezier_interpolate(database, block_size, 0 * a_offset_coef + t_offset, x)
+    end   = bezier_interpolate(database, block_size, 1 * a_offset_coef + t_offset, x)
 
-    # Lerp for albedo
-    if dr.is_integral_v(t) and not dr.is_integral_v(a):
-        d1 = bezier_interpolate(database[0, t-1], x)
-        d2 = bezier_interpolate(database[1, t-1], x)
+    lerp_t_low = dr.lerp(start, end, a)
 
-        return dr.lerp(d1, d2, a)
+    if t_low == 9:
+        return lerp_t_low
 
-    # Lerp for turbidity
-    if not dr.is_integral_v(t) and dr.is_integral_v(a):
-        t_idx_low = mi.Int(dr.floor(t) - 1)
+    # Lerp on t_high
+    t_offset = (t_low + 1) * block_size
+    start = bezier_interpolate(database, block_size, 0 * a_offset_coef + t_offset, x)
+    end   = bezier_interpolate(database, block_size, 1 * a_offset_coef + t_offset, x)
 
-        d1 = bezier_interpolate(database[a, t_idx_low], x)
-        d2 = bezier_interpolate(database[a, t_idx_low + 1], x)
+    lerp_t_high = dr.lerp(start, end, a)
 
-        return dr.lerp(d1, d2, t - dr.floor(t))
-
-    # Evaluate on data point
-    if dr.is_integral_v(t) and dr.is_integral_v(a):
-        return bezier_interpolate(database[a, t], x)
-
+    return dr.lerp(lerp_t_low, lerp_t_high, t - dr.floor(t))

@@ -7,8 +7,8 @@ import matplotlib.pyplot as plt
 
 mi.set_variant("llvm_rgb")
 
+from helpers import get_north_hemisphere_rays
 from sunsky_data import get_params, get_rad, get_sun
-from helpers import get_camera_rays, get_north_hemisphere_rays
 
 
 def test_mean_radiance_data():
@@ -58,18 +58,18 @@ def test_radiance_data():
                    "Incorrect values for radiance (a=1, t=6, lbda=5)")
 
 @dr.syntax
-def test_render(dataset, dataset_rad, shape, t, a, eta):
+def test_render(database: tuple[list[int], mi.Float], database_rad: tuple[list[int], mi.Float], render_shape, t, a, eta):
     # Compute coefficients
-    params = get_params(dataset, eta, t, a)
-    mean_radiance = get_params(dataset_rad, eta, t, a)
+    params = get_params(database[1], database[0], t, a, eta)
+    mean_radiance = get_params(database_rad[1], database_rad[0], t, a, eta)
 
     # Get rays
-    view_dir, thetas = get_north_hemisphere_rays(shape, True)
+    view_dir, thetas = get_north_hemisphere_rays(render_shape, True)
     sun_dir = mi.Vector3f(dr.sin(eta), 0, dr.cos(eta))
 
     gammas = dr.safe_acos(dr.dot(view_dir, sun_dir))
 
-    res = dr.zeros(mi.TensorXf, (3, shape[0], shape[1]))
+    res = dr.zeros(mi.TensorXf, (3, render_shape[0], render_shape[1]))
 
     i = 0
     while i < mean_radiance.shape[0]:
@@ -142,14 +142,15 @@ if __name__ == "__main__":
     #test_radiance_data()
     #render_suite()
 
-    dataset_rad: mi.TensorXf = mi.tensor_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_rgb_rad.bin")
-    dataset: mi.TensorXf = mi.tensor_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_rgb.bin")
-    shape = (256, 256*4)
+    database_rad = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_rgb_rad.bin")
+    database = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_rgb.bin")
+
+    render_shape = (256, 256*4)
 
     dr.kernel_history_clear()
 
     with dr.scoped_set_flag(dr.JitFlag.KernelHistory):
-        res = test_render(dataset, dataset_rad, shape, 2, 0.5, dr.pi/4)
+        res = test_render(database, database_rad, render_shape, 2, 0.5, dr.pi/4)
 
     dr.print(dr.kernel_history())
 
