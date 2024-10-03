@@ -81,15 +81,16 @@ NAMESPACE_BEGIN(mitsuba)
         // Write reordered shapes
         file.write(dim_size[ALBEDO]);
         file.write(dim_size[TURBIDITY]);
-        file.write(dim_size[WAVELENGTH]);
 
         if (nb_dims == F_DIM) {
-            file.write(dim_size[PARAMS]);
             file.write(dim_size[CTRL_PT]);
+            file.write(dim_size[WAVELENGTH]);
+            file.write(dim_size[PARAMS]);
         } else if (nb_dims == L_DIM) {
             file.write(dim_size[CTRL_PT - 1]);
+            file.write(dim_size[WAVELENGTH]);
         } else {
-            Throw("Incorect number of dimmensions");
+            Throw("Incorrect number of dimensions");
         }
 
         // nb_data = nb of elements once color, albedo and turbidity are set
@@ -98,24 +99,25 @@ NAMESPACE_BEGIN(mitsuba)
 
         double* buffer = (double*)calloc(tensor_size, sizeof(double));
 
-        // Converts from (11 x 2 x 10 x 6 x ...) to (2 x 10 x 11 x ... x 6)
+        // Converts from (11 x 2 x 10 x 6 x ...) to (2 x 10 x 6 x 11 x ...)
         for (size_t a = 0; a < 2; ++a) {
-            size_t dest_a_offset = a * (NB_TURBIDITY * nb_colors * nb_params * NB_CTRL_PT),
+            size_t dest_a_offset = a * (NB_TURBIDITY * NB_CTRL_PT * nb_colors * nb_params),
                    src_a_offset  = a * (NB_TURBIDITY * NB_CTRL_PT * nb_params);
 
             for (size_t t = 0; t < NB_TURBIDITY; ++t) {
-                size_t dest_t_offset = t * (nb_colors * nb_params * NB_CTRL_PT),
+                size_t dest_t_offset = t * (NB_CTRL_PT * nb_colors * nb_params),
                        src_t_offset  = t * NB_CTRL_PT * nb_params;
 
-                for (size_t color_idx = 0; color_idx < nb_colors; ++color_idx) {
-                    size_t dest_col_offset = color_idx * nb_params * NB_CTRL_PT;
+                for (size_t ctrl_idx = 0; ctrl_idx < NB_CTRL_PT; ++ctrl_idx) {
+                    size_t dest_ctrl_offset = ctrl_idx * nb_colors * nb_params,
+                           src_ctrl_offset  = ctrl_idx * nb_params;
 
-                    for (size_t param_idx = 0; param_idx < nb_params; ++param_idx) {
-                        size_t dest_param_offset = param_idx * NB_CTRL_PT;
+                    for (size_t color_idx = 0; color_idx < nb_colors; ++color_idx) {
+                        size_t dest_col_offset = color_idx * nb_params;
 
-                        for (size_t ctrl_idx = 0; ctrl_idx < NB_CTRL_PT; ++ctrl_idx) {
-                            size_t dest_global_offset = dest_a_offset + dest_t_offset + dest_col_offset + dest_param_offset + ctrl_idx,
-                                   src_global_offset  = src_a_offset + src_t_offset + ctrl_idx * nb_params + param_idx;
+                        for (size_t param_idx = 0; param_idx < nb_params; ++param_idx) {
+                            size_t dest_global_offset = dest_a_offset + dest_t_offset + dest_ctrl_offset + dest_col_offset + param_idx,
+                                   src_global_offset  = src_a_offset + src_t_offset + src_ctrl_offset + param_idx;
 
                             buffer[dest_global_offset] = p_dataset[color_idx][src_global_offset];
 

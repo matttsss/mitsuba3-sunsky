@@ -1,21 +1,45 @@
 import mitsuba as mi
 import drjit as dr
 
-def bezier_interpolate(data: mi.TensorXf, x: mi.Float):
+def get_sun(sun_dir, view_dir, sun_radii, sun_dropoff, horizon_dropoff):
+    def smoothstep(x):
+        x = dr.clip(x, 0, 1)
+        return 3 * x**2 - 2 * x**3
+
+    theta = dr.acos(mi.Frame3f(mi.Vector3f(0, 0, 1)).cos_theta(view_dir))
+    eta = dr.acos(dr.dot(sun_dir, view_dir))
+
+    return smoothstep((eta - 0.5 * sun_radii) / -sun_dropoff) * smoothstep((theta - 0.5 * dr.pi) / -horizon_dropoff)
+
+def get_rad(coefs: mi.Float, theta: mi.Float, gamma: mi.Float) -> mi.Float:
+    cos_theta = dr.cos(theta)
+    cos_gamma = dr.cos(gamma)
+    cos_gamma_sqr = dr.square(cos_gamma)
+
+    c1 = 1 + coefs[0] * dr.exp(coefs[1] / (cos_theta + 0.01))
+    chi = (1 + cos_gamma_sqr) / dr.power(1 + dr.square(coefs[7]) - 2 * coefs[7] * cos_gamma, 1.5)
+    c2 = coefs[2] + coefs[3] * dr.exp(coefs[4] * gamma) + coefs[5] * cos_gamma_sqr + coefs[6] * chi + coefs[8] * dr.safe_sqrt(cos_theta)
+
+    return c1 * c2
+
+
+def bezier_interpolate(data: mi.TensorXf, x: mi.Float) -> mi.Float:
     """
      Interpolates data along a quintic Bézier curve
-    :param data: A tensor of shape [..., 6]
-    :param x: belongs to [0, 1], Point to interpolate data at
-    :return: The interpolated data
+    :param data: A tensor of shape [6, C, P]
+    :param x: belongs to [0, 1], point to interpolate data at
+    :return: The interpolated data in flat array of "shape" [C, P]
     """
 
-    coefs = mi.Float(1, 5, 10, 10, 5, 1)
-    powers = dr.arange(mi.Int, 6)
+    coefs  = [1, 5, 10, 10, 5, 1]
+    powers = [0, 1, 2, 3, 4, 5]
 
-    coefs *= dr.power(x, powers)
-    coefs *= dr.power(1 - x, dr.reverse(powers))
+    res = dr.zeros(mi.Float, dr.prod(data.shape[1:]))
+    for i in range(6):
+        term = coefs[i] * x**powers[i] * (1 - x)**powers[5-i] * data[i]
+        res += dr.ravel(term, 'C')
 
-    return dr.sum(coefs * data, axis=data.ndim - 1)
+    return res
 
 
 def get_params(database: mi.TensorXf, eta: mi.Float, t: mi.Int | mi.Float, a: mi.Int | mi.Float) -> mi.TensorXf:
@@ -25,8 +49,6 @@ def get_params(database: mi.TensorXf, eta: mi.Float, t: mi.Int | mi.Float, a: mi
     dr.assert_true(1 <= t <= 10, "Turbidity value is not between 0 and 10: %f", t)
 
     x: mi.Float = dr.power(2 * dr.inv_pi * eta, 1/3)
-
-    # TODO sort for invisible dim when mi.Var is index
 
     # Lerp for albedo and turbidity
     if not dr.is_integral_v(t) and not dr.is_integral_v(a):
@@ -62,25 +84,3 @@ def get_params(database: mi.TensorXf, eta: mi.Float, t: mi.Int | mi.Float, a: mi
     if dr.is_integral_v(t) and dr.is_integral_v(a):
         return bezier_interpolate(database[a, t], x)
 
-def get_sun(sun_dir, view_dir, sun_radii, sun_dropoff, horizon_dropoff):
-    def smoothstep(x):
-        x = dr.clip(x, 0, 1)
-        return 3 * x**2 - 2 * x**3
-
-    theta = dr.acos(mi.Frame3f(mi.Vector3f(0, 0, 1)).cos_theta(view_dir))
-    eta = dr.acos(dr.dot(sun_dir, view_dir))
-
-    return smoothstep((eta - 0.5 * sun_radii) / -sun_dropoff) * smoothstep((theta - 0.5 * dr.pi) / -horizon_dropoff)
-
-def get_rad(coefs: mi.TensorXf, theta: mi.Float, gamma: mi.Float) -> mi.Float:
-    cos_theta = dr.cos(theta)
-    cos_gamma = dr.cos(gamma)
-    cos_gamma_sqr = dr.square(cos_gamma)
-
-    A, B, C, D, E, F, G, H, I = coefs
-
-    c1 = 1 + A * dr.exp(B / (cos_theta + 0.01))
-    chi = (1 + cos_gamma_sqr) / dr.power(1 + dr.square(H) - 2 * H * cos_gamma, 1.5)
-    c2 = C + D * dr.exp(E * gamma) + F * cos_gamma_sqr + G * chi + I * dr.safe_sqrt(cos_theta)
-
-    return c1 * c2
