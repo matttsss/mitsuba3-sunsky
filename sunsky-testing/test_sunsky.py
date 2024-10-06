@@ -60,10 +60,10 @@ def test_radiance_data():
                    "Incorrect values for radiance (a=1, t=6, lbda=5)")
 
 @dr.syntax
-def test_render(database: tuple[list[int], mi.Float], database_rad: tuple[list[int], mi.Float], render_shape, t, a, eta):
+def test_render(database, database_rad, render_shape, t, a, eta):
     # Compute coefficients
-    params = get_params(database[1], database[0], t, a, eta)
-    mean_radiance = get_params(database_rad[1], database_rad[0], t, a, eta)
+    params = get_params(database, t, a, eta)
+    mean_radiance = get_params(database_rad, t, a, eta)
 
     # Get rays
     view_dir, thetas = get_north_hemisphere_rays(render_shape, True)
@@ -71,10 +71,11 @@ def test_render(database: tuple[list[int], mi.Float], database_rad: tuple[list[i
 
     gammas = dr.safe_acos(dr.dot(view_dir, sun_dir))
 
-    res = dr.zeros(mi.TensorXf, (render_shape[0], render_shape[1], 3))
+    nb_channels = mean_radiance.shape[0]
+    res = dr.zeros(mi.TensorXf, (render_shape[0], render_shape[1], nb_channels))
 
     i = 0
-    while i < mean_radiance.shape[0]:
+    while i < nb_channels:
         coefs = dr.gather(mi.Float, params, i*9 + dr.arange(mi.UInt32, 9))
         res[::, ::, i] = get_rad(coefs, thetas, gammas) * mean_radiance[i]
         i += 1
@@ -93,8 +94,8 @@ def render_sun():
     mi.util.write_bitmap(f"sunsky-testing/res/renders/sun_test.exr", res)
 
 def render_suite():
-    database_rad = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_rgb_rad.bin")
-    database = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_rgb.bin")
+    _, dataset_rad = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_rgb_rad.bin")
+    _, dataset = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_rgb.bin")
 
     shape = (256, 256*4)
 
@@ -107,18 +108,18 @@ def render_suite():
     test_params = [(1, 0.5, r30), (3, 0.2, r30), (3, 0.8, r30), (5, 0, r30), (5, 1, r30), (6, 0.2, r30), (6, 0.5, r30)]
 
     for (t, a, eta) in test_params:
-        res = test_render(database, database_rad, shape, t, a, eta)
+        res = test_render(dataset, dataset_rad, shape, t, a, eta)
         mi.util.write_bitmap(f"sunsky-testing/res/renders/sm_t{t}_a{a}_eta{int(eta * 2 * dr.inv_pi * 100)}.exr", res)
 
     for eta in [r5, r10, r30, r50, r70]:
         t, a = 6, 0.5
-        res = test_render(database, database_rad, shape, t, a, eta)
+        res = test_render(dataset, dataset_rad, shape, t, a, eta)
         mi.util.write_bitmap(f"sunsky-testing/res/renders/sm_t{t}_a{a}_eta{int(eta * 2 * dr.inv_pi * 100)}.exr", res)
 
 def test_plot_spectral():
     wavelengths = [320, 360, 400, 440, 480, 520, 560, 600, 640, 680, 720]
-    dataset_rad: mi.TensorXf = mi.tensor_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_spec_rad.bin")
-    dataset: mi.TensorXf = mi.tensor_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_spec.bin")
+    _, dataset_rad = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_spec_rad.bin")
+    _, dataset = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_spec.bin")
 
     eta, t, a = dr.pi/2 * (30/100), 6, 0.5
 
@@ -128,7 +129,7 @@ def test_plot_spectral():
 
     for i in range(11):
         subplot = axes[i//4][i%4]
-        subplot.imshow(res[i], cmap="hot")
+        subplot.imshow(res[::, ::, i], cmap="hot")
         subplot.axis('off')
         subplot.set_title(f"{wavelengths[i]}$\\lambda$")
     fig.delaxes(axes[2][3])
@@ -138,10 +139,11 @@ def test_plot_spectral():
 
 
 if __name__ == "__main__":
-    #mi.write_sky_model_data_v1("sunsky-testing/res/datasets/ssm_dataset")
+    mi.write_sky_model_data_v1("sunsky-testing/res/datasets/ssm_dataset")
 
     test_mean_radiance_data()
     test_radiance_data()
+    test_plot_spectral()
     render_suite()
 
     #database_rad = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_rgb_rad.bin")

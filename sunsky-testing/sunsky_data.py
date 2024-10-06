@@ -23,7 +23,7 @@ def get_rad(coefs: mi.Float, theta: mi.Float, gamma: mi.Float) -> mi.Float:
     return c1 * c2
 
 
-def bezier_interpolate(dataset: mi.Float, block_size: mi.UInt32, offset: mi.UInt32, x: mi.Float) -> mi.Float:
+def bezier_interpolate(dataset: mi.Float, block_size: int, offset: mi.UInt32, x: mi.Float) -> mi.Float:
     """
      Interpolates data along a quintic Bézier curve
     :param dataset: Flat dataset
@@ -34,22 +34,19 @@ def bezier_interpolate(dataset: mi.Float, block_size: mi.UInt32, offset: mi.UInt
     """
 
     coefs  = [1, 5, 10, 10, 5, 1]
-    powers = [0, 1, 2, 3, 4, 5]
 
-    # TODO a way to avoid this? arange does not support a mi.UInt32 variant as size
-    inner_block_size = (block_size//6)[0]
+    inner_block_size = block_size // 6
     indices = offset + dr.arange(mi.UInt32, inner_block_size)
 
     res = dr.zeros(mi.Float, inner_block_size)
     for i in range(6):
         data = dr.gather(mi.Float, dataset, indices + i * inner_block_size)
-        res += coefs[i] * x**powers[i] * (1 - x)**powers[5-i] * data
+        res += coefs[i] * (x ** i) * ((1 - x) ** (5-i)) * data
 
     return res
 
 
-def get_params(database: mi.Float, shape, t: mi.Int | mi.Float, a: mi.Int | mi.Float, eta: mi.Float) -> mi.TensorXf:
-    dr.assert_true(shape[0] == 2 and shape[1] == 10, "Sky model dataset is not not of the right shape")
+def get_params(database: mi.Float, t: mi.Int | mi.Float, a: mi.Int | mi.Float, eta: mi.Float) -> mi.TensorXf:
     dr.assert_true(0 <= eta <= 0.5 * dr.pi, "Sun elevation is not between 0 and %f (pi/2): %f", (dr.pi/2, eta))
     dr.assert_true(0 <= a <= 1, "Albedo (a) value is not between 0 and 1: %f", a)
     dr.assert_true(1 <= t <= 10, "Turbidity value is not between 0 and 10: %f", t)
@@ -57,27 +54,15 @@ def get_params(database: mi.Float, shape, t: mi.Int | mi.Float, a: mi.Int | mi.F
     x: mi.Float = dr.power(2 * dr.inv_pi * eta, 1/3)
 
     t_low = mi.UInt32(dr.floor(t - 1))
+    t_high = dr.minimum(t_low + 1, 9)
+    t_rem = t - t_low
 
-    a_offset_coef = mi.UInt32(dr.prod(shape)) // 2
-    block_size = a_offset_coef // 10 # Size of the data block between two 't' indices
+    a_block_size = len(database) // 2
+    t_block_size = a_block_size // 10
 
-    # TODO condense lerps in while loop
+    res  = (1 - t_rem) * (1 - a) * bezier_interpolate(database, t_block_size, 0 * a_block_size + t_low  * t_block_size, x)
+    res += (1 - t_rem) * a       * bezier_interpolate(database, t_block_size, 1 * a_block_size + t_low  * t_block_size, x)
+    res += t_rem       * (1 - a) * bezier_interpolate(database, t_block_size, 0 * a_block_size + t_high * t_block_size, x)
+    res += t_rem       * a       * bezier_interpolate(database, t_block_size, 1 * a_block_size + t_high * t_block_size, x)
 
-    # Lerp on t_low
-    t_offset = t_low * block_size
-    start = bezier_interpolate(database, block_size, 0 * a_offset_coef + t_offset, x)
-    end   = bezier_interpolate(database, block_size, 1 * a_offset_coef + t_offset, x)
-
-    lerp_t_low = dr.lerp(start, end, a)
-
-    if t_low == 9:
-        return lerp_t_low
-
-    # Lerp on t_high
-    t_offset = (t_low + 1) * block_size
-    start = bezier_interpolate(database, block_size, 0 * a_offset_coef + t_offset, x)
-    end   = bezier_interpolate(database, block_size, 1 * a_offset_coef + t_offset, x)
-
-    lerp_t_high = dr.lerp(start, end, a)
-
-    return dr.lerp(lerp_t_low, lerp_t_high, t - dr.floor(t))
+    return res
