@@ -1,7 +1,8 @@
 import drjit as dr
 import mitsuba as mi
 
-from sunsky_data import get_params
+from sunsky_data import get_params, get_rad
+
 
 class SunskyEmitter(mi.Emitter):
 
@@ -11,23 +12,27 @@ class SunskyEmitter(mi.Emitter):
         self.m_bsphere = mi.BoundingSphere3f(mi.Point3f(0), mi.Float(1))
         self.m_surface_area = 4.0 * dr.pi
 
-        self.m_radiance: mi.Texture = props.get("radiance")
-        dr.assert_false(self.m_radiance.is_spatially_varying())
+        #self.m_radiance: mi.Texture = props.get("radiance")
+        #dr.assert_false(self.m_radiance.is_spatially_varying())
 
         self.m_sun_dir = dr.normalize(props.get("sun_dir", mi.Vector3f(dr.sin(dr.pi/5), 0, dr.cos(dr.pi/5))))
         self.m_albedo = props.get("albedo", 0.5)
         self.m_turb = props.get("turbidity", 6)
 
         dataset_name = props.get("dataset_name", "sunsky-testing/res/ssm_dataset_v1_rgb")
-        dataset = mi.tensor_from_file(dataset_name + ".bin")
-        dataset_rad = mi.tensor_from_file(dataset_name + "_rad.bin")
+        _, database = mi.tensor_from_file(dataset_name + ".bin")
+        _, database_rad = mi.tensor_from_file(dataset_name + "_rad.bin")
+
+        if mi.is_spectral:
+            self.wavelengths = mi.Spectrum([320, 360, 400, 420, 460, 520, 560, 600, 640, 680, 720])
+            self.wavelength_step = 40
 
 
         self.m_up_frame = mi.Frame3f(mi.Vector3f(0, 0, 1))
         sun_elevation = dr.pi/2 - dr.acos(self.m_up_frame.cos_theta(self.m_sun_dir))
 
-        self.m_params = get_params(dataset, sun_elevation, self.m_turb, self.m_albedo)
-        self.m_rad: mi.Float = get_params(dataset_rad, sun_elevation, self.m_turb, self.m_albedo)
+        self.m_params = get_params(database, self.m_turb, self.m_albedo, sun_elevation)
+        self.m_rad: mi.Float = get_params(database_rad, self.m_turb, self.m_albedo, sun_elevation)
 
         self.m_flags = mi.EmitterFlags.Infinite | mi.EmitterFlags.SpatiallyVarying
 
@@ -44,23 +49,31 @@ class SunskyEmitter(mi.Emitter):
 
     @dr.syntax
     def eval(self, si, active=True):
-        cos_gamma = dr.dot(si.wi, self.m_sun_dir)
-        cos_gamma_sqr = cos_gamma ** 2
-        cos_theta = self.m_up_frame.cos_theta(si.wi)
+        gamma = dr.acos(dr.dot(si.wi, self.m_sun_dir))
+        theta = dr.acos(self.m_up_frame.cos_theta(si.wi))
 
-        nb_colors = len(self.m_rad)
-        res = dr.zeros(mi.Float, nb_colors)
+        if mi.is_rgb:
+            res = dr.zeros(mi.Spectrum, len(gamma))
+            res.x = get_rad(self.m_params[0], theta, gamma) * self.m_rad[0]
+            res.y = get_rad(self.m_params[1], theta, gamma) * self.m_rad[1]
+            res.z = get_rad(self.m_params[2], theta, gamma) * self.m_rad[2]
+            return res
 
-        i = 0
-        while active and cos_theta > 0 and (i < nb_colors):
-            A, B, C, D, E, F, G, H, I = self.m_params[i]
+        else:
+            res = dr.zeros(mi.Spectrum, len(gamma))
 
-            c1 = 1 + A * dr.exp(B / (cos_theta + 0.01))
-            chi = (1 + cos_gamma_sqr) / dr.power(1 + dr.square(H) - 2 * H * cos_gamma, 1.5)
-            c2 = C + D * dr.exp(E * dr.acos(cos_gamma)) + F * cos_gamma_sqr + G * chi + I * dr.safe_sqrt(cos_theta)
+            i = 0
+            while active and i < len(si.wavelengths):
+                query_val = si.wavelengths[i]
+                query_idx = mi.Int((query_val - self.wavelengths[0]) / self.wavelength_step)
+                if query_idx < 0 or query_idx > len(self.wavelengths) - 1:
+                    res[i] = 0
+                else:
+                    coefs = dr.gather(mi.Float, self.m_params, query_idx * 9 + dr.arange(mi.Float, 9))
+                    temp = get_rad(coefs, theta, gamma) * self.m_rad[query_idx]
 
-            res[i] = c1 * c2
-            i += 1
+                i += 1
+
 
         # TODO construct spectrum
         return mi.depolarizer(self.m_radiance.eval(si, active))

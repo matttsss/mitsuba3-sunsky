@@ -18,7 +18,7 @@ def get_rad(coefs: mi.Float, theta: mi.Float, gamma: mi.Float) -> mi.Float:
 
     c1 = 1 + coefs[0] * dr.exp(coefs[1] / (cos_theta + 0.01))
     chi = (1 + cos_gamma_sqr) / dr.power(1 + dr.square(coefs[7]) - 2 * coefs[7] * cos_gamma, 1.5)
-    c2 = coefs[2] + coefs[3] * dr.exp(coefs[4] * gamma) + coefs[5] * cos_gamma_sqr + coefs[6] * chi + coefs[8] * dr.safe_sqrt(cos_theta)
+    c2 = coefs[2] + coefs[3] * dr.exp(coefs[4] * gamma) + coefs[5] * cos_gamma_sqr + coefs[6] * chi + coefs[8] * dr.sqrt(cos_theta)
 
     return c1 * c2
 

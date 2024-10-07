@@ -22,12 +22,12 @@ NAMESPACE_BEGIN(mitsuba)
     #define F_DIM 5
     #define L_DIM 4
 
-    enum DataSetShapeIdx { WAVELENGTH = 0, ALBEDO, TURBIDITY, PARAMS, CTRL_PT };
+    enum DataSetShapeIdx { WAVELENGTH = 0, ALBEDO, TURBIDITY, CTRL_PT, PARAMS };
 
-    constexpr size_t f_spec_shape[F_DIM] = {11, 2, NB_TURBIDITY, NB_PARAMS, NB_CTRL_PT};
+    constexpr size_t f_spec_shape[F_DIM] = {11, 2, NB_TURBIDITY, NB_CTRL_PT, NB_PARAMS};
     constexpr size_t l_spec_shape[L_DIM] = {11, 2, NB_TURBIDITY, NB_CTRL_PT};
 
-    constexpr size_t f_tri_shape[F_DIM] = {3, 2, NB_TURBIDITY, NB_PARAMS, NB_CTRL_PT};
+    constexpr size_t f_tri_shape[F_DIM] = {3, 2, NB_TURBIDITY, NB_CTRL_PT, NB_PARAMS};
     constexpr size_t l_tri_shape[L_DIM] = {3, 2, NB_TURBIDITY, NB_CTRL_PT};
 
     struct Dataset {
@@ -75,7 +75,7 @@ NAMESPACE_BEGIN(mitsuba)
 
         size_t tensor_size = 1;
         for (size_t dim = 0; dim < nb_dims; ++dim)
-            tensor_size *=  dim_size[dim];
+            tensor_size *= dim_size[dim];
 
 
         // Write reordered shapes
@@ -87,13 +87,12 @@ NAMESPACE_BEGIN(mitsuba)
             file.write(dim_size[WAVELENGTH]);
             file.write(dim_size[PARAMS]);
         } else if (nb_dims == L_DIM) {
-            file.write(dim_size[CTRL_PT - 1]);
+            file.write(dim_size[CTRL_PT]);
             file.write(dim_size[WAVELENGTH]);
         } else {
             Throw("Incorrect number of dimensions");
         }
 
-        // nb_data = nb of elements once color, albedo and turbidity are set
         const size_t nb_params = nb_dims == F_DIM ? NB_PARAMS : 1,
                      nb_colors = dim_size[WAVELENGTH];
 

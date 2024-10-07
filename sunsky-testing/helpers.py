@@ -3,8 +3,8 @@ import mitsuba as mi
 
 def get_north_hemisphere_rays(resolution, ret_thetas=False):
     phi, thetas = dr.meshgrid(
-        dr.linspace(mi.Float, -dr.pi, dr.pi, resolution[1]),
-        dr.linspace(mi.Float, 0, dr.pi / 2, resolution[0])
+        dr.linspace(mi.Float, -dr.pi, dr.pi, resolution[0]),
+        dr.linspace(mi.Float, dr.pi/2, 0, resolution[1])
     )
 
     st, ct = dr.sincos(thetas)
