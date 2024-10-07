@@ -4,28 +4,32 @@ import mitsuba as mi
 def test_mean_radiance_data():
     dr.print("Testing mean radiance values")
 
-    rad_shape, dataset_rad = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_spec_rad.bin")
-    dataset = mi.TensorXf(dataset_rad, tuple(rad_shape))
+    _, dataset_rad = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_spec_rad.bin")
 
     # Control points for mean radiance at a = 0, t = 2, lbda = 0
+    index = 0 * (10 * 6 * 11) + 1 * (6 * 11) + dr.arange(mi.UInt32, 6) * 11 + 0
     expected = mi.Float(9.160628e-004, 2.599956e-004, 5.466998e-003, -1.503537e-002, 7.200167e-002, 5.387713e-002)
-    dr.assert_true(dr.allclose(expected, dataset[0, 1, ::, 0]), "Incorrect values for mean radiance (a=0, t=2, lbda=0)")
+    assert dr.allclose(expected, dr.gather(mi.Float, dataset_rad, index)), "Incorrect values for mean radiance (a=0, t=2, lbda=0)"
 
     # Control points for mean radiance at a = 1, t = 6, lbda = 5
+    index = 1 * (10 * 6 * 11) + 5 * (6 * 11) + dr.arange(mi.UInt32, 6) * 11 + 5
     expected = mi.Float(1.245635e-002, 2.874175e-002, -6.384005e-002, 2.429023e-001, 2.428387e-001, 2.418906e-001,)
-    dr.assert_true(dr.allclose(expected, dataset[1, 5, ::, 5]), "Incorrect values for mean radiance (a=1, t=6, lbda=5)")
+    assert dr.allclose(expected, dr.gather(mi.Float, dataset_rad, index)), "Incorrect values for mean radiance (a=1, t=6, lbda=5)"
+
+
 
     # Test RGB dataset
-    shape, dataset = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_rgb_rad.bin")
-    dataset = mi.TensorXf(dataset, tuple(shape))
+    _, dataset = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_rgb_rad.bin")
 
     # albedo 0, turbidity 3, G
+    index = 0 * (10 * 6 * 3) + 2 * (6 * 3) + dr.arange(mi.UInt32, 6) * 3 + 1
     expected = mi.Float(1.470871e+000, 1.880464e+000, -1.865398e+000, 2.030808e+001, 5.471461e+000, 9.109834e+000)
-    dr.assert_true(dr.allclose(expected, dataset[0, 2, ::, 1]), "Incorrect values for mean radiance (a=0, t=3, G)")
+    assert dr.allclose(expected, dr.gather(mi.Float, dataset, index)), "Incorrect values for mean radiance (a=0, t=3, G)"
 
     # albedo 1, turbidity 4, B
+    index = 1 * (10 * 6 * 3) + 3 * (6 * 3) + dr.arange(mi.UInt32, 6) * 3 + 2
     expected = mi.Float(1.077948e+000, 2.006292e+000, -2.846934e+000, 1.190195e+001, 3.459293e+001, 2.937492e+001)
-    dr.assert_true(dr.allclose(expected, dataset[1, 4, ::, 2]), "Incorrect values for mean radiance (a=0, t=3, G)")
+    assert dr.allclose(expected, dr.gather(mi.Float, dataset, index)), "Incorrect values for mean radiance (a=0, t=3, G)"
 
 
 
@@ -46,8 +50,7 @@ def test_radiance_data():
                         -4.089673e-003, 3.335089e-001, 6.827164e-001, -1.280108e+000, -1.013716e+000, 5.577676e-001,
                         9.539205e-004, -4.934956e+000, 2.642883e-001, 1.005169e-002, 9.265844e-001, 4.999698e-001)
 
-    dr.assert_true(dr.allclose(expected, dr.unravel(mi.Float, mi.Float(dataset[0, 1, ::, 0]), "C")),
-                   "Incorrect values for radiance (a=0, t=2, lbda=0)")
+    assert dr.allclose(expected, dr.unravel(mi.Float, mi.Float(dataset[0, 1, ::, 0]), "C")), "Incorrect values for radiance (a=0, t=2, lbda=0)"
 
     # Control points for radiance at a = 1, t = 6, lbda = 5
     expected = mi.Float(-1.330626e+000, -4.272516e-001, -1.317682e+000, 1.650847e+000, -1.192771e-001, 4.904191e-001,
@@ -60,8 +63,7 @@ def test_radiance_data():
                         -3.239225e-001, 3.899425e+000, 1.179264e+000, -1.106228e+000, -1.927917e-001, 1.179701e+000,
                         2.379834e+001, -4.870211e+000, -1.290713e+000, 2.854422e-001, 2.078973e+000, 5.128625e-001)
 
-    dr.assert_true(dr.allclose(expected, dr.unravel(mi.Float, mi.Float(dataset[1, 5, ::, 5]), "C")),
-                   "Incorrect values for radiance (a=1, t=6, lbda=5)")
+    assert dr.allclose(expected, dr.unravel(mi.Float, mi.Float(dataset[1, 5, ::, 5]), "C")), "Incorrect values for radiance (a=1, t=6, lbda=5)"
 
     # Test RGB dataset
     shape, dataset = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_rgb.bin")
@@ -78,7 +80,7 @@ def test_radiance_data():
                         -7.269476e-002, 1.996087e+000, 1.057450e+000, -1.046864e+000, -2.247559e-001, 1.679449e+000,
                         1.140057e+001, -4.948829e+000, -1.182664e+000, 3.241038e-001, -2.470012e-001, 6.115900e-001)
 
-    dr.assert_true(dr.allclose(expected, dr.unravel(mi.Float, mi.Float(dataset[1, 7, ::, 0]), "C")))
+    assert dr.allclose(expected, dr.unravel(mi.Float, mi.Float(dataset[1, 7, ::, 0]), "C"))
 
     # Control points for radiance at a = 0, t = 6, G
     expected = mi.Float(-1.316017e+000, -3.889652e-001, -5.030854e-001, 4.488704e-001, -3.186800e-001, 4.570763e-001,
@@ -91,4 +93,4 @@ def test_radiance_data():
                         1.978131e-002, 3.959430e+000, 8.396439e-001, -1.063233e+000, -1.560639e-001, 2.840033e-001,
                         8.751565e-001, -3.411820e+000, -1.436564e-001, 5.846580e-001, 2.899292e+000, 6.799095e-001)
 
-    dr.assert_true(dr.allclose(expected, dr.unravel(mi.Float, mi.Float(dataset[0, 5, ::, 1]), "C")))
+    assert dr.allclose(expected, dr.unravel(mi.Float, mi.Float(dataset[0, 5, ::, 1]), "C"))

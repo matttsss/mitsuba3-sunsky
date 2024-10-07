@@ -62,9 +62,10 @@ def get_params(dataset: mi.Float, t: mi.Int | mi.Float, a: mi.Int | mi.Float, et
 
     x: mi.Float = dr.power(2 * dr.inv_pi * eta, 1/3)
 
-    t_low = mi.UInt32(dr.floor(t)) - 1
+    t_int = mi.UInt32(dr.floor(t))
+    t_low = t_int - 1
     t_high = dr.minimum(t_low + 1, 9)
-    t_rem = t - t_low
+    t_rem = t - t_int
 
     a_block_size = len(dataset) // 2
     t_block_size = a_block_size // 10

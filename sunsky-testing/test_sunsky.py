@@ -19,7 +19,7 @@ def test_render(database, database_rad, render_shape, t, a, eta):
 
     # Get rays
     view_dir, thetas = get_north_hemisphere_rays(render_shape, True)
-    sun_dir = mi.Vector3f(dr.sin(eta), 0, dr.cos(eta))
+    sun_dir = mi.Vector3f(dr.cos(eta), 0, dr.sin(eta))
 
     gammas = dr.safe_acos(dr.dot(view_dir, sun_dir))
 
