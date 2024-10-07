@@ -23,7 +23,7 @@ def test_render(database, database_rad, render_shape, t, a, eta):
 
     gammas = dr.safe_acos(dr.dot(view_dir, sun_dir))
 
-    nb_channels = mean_radiance.shape[0]
+    nb_channels = len(mean_radiance)
     res = dr.zeros(mi.TensorXf, (render_shape[1], render_shape[0], nb_channels))
 
     i = 0
@@ -50,7 +50,7 @@ def render_suite():
     _, dataset_rad = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_rgb_rad.bin")
     _, dataset = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_rgb.bin")
 
-    shape = (256*4, 256)
+    resolution = (256*4, 256)
 
     r70 = dr.pi/2 * (70/100)
     r50 = dr.pi/2 * (50/100)
@@ -58,15 +58,14 @@ def render_suite():
     r10 = dr.pi/2 * (10/100)
     r5 = dr.pi/2 * (5/100)
 
-    test_params = [(1, 0.5, r30), (3, 0.2, r30), (3, 0.8, r30), (5, 0, r30), (5, 1, r30), (6, 0.2, r30), (6, 0.5, r30)]
-
-    for (t, a, eta) in test_params:
-        res = test_render(dataset, dataset_rad, shape, t, a, eta)
-        mi.util.write_bitmap(f"sunsky-testing/res/renders/sm_t{t}_a{a}_eta{int(eta * 2 * dr.inv_pi * 100)}.exr", res)
-
     for eta in [r5, r10, r30, r50, r70]:
         t, a = 6, 0.5
-        res = test_render(dataset, dataset_rad, shape, t, a, eta)
+        res = test_render(dataset, dataset_rad, resolution, t, a, eta)
+        mi.util.write_bitmap(f"sunsky-testing/res/renders/sm_t{t}_a{a}_eta{int(eta * 2 * dr.inv_pi * 100)}.exr", res)
+
+    for t in range(1, 11):
+        eta, a = r30, 0.5
+        res = test_render(dataset, dataset_rad, resolution, t, a, eta)
         mi.util.write_bitmap(f"sunsky-testing/res/renders/sm_t{t}_a{a}_eta{int(eta * 2 * dr.inv_pi * 100)}.exr", res)
 
 def test_plot_spectral():
