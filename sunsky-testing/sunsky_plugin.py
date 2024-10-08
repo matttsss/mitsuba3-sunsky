@@ -9,13 +9,10 @@ class SunskyEmitter(mi.Emitter):
     def __init__(self, props):
         super().__init__(props)
 
-        self.m_bsphere = mi.BoundingSphere3f(mi.Point3f(0), mi.Float(1))
+        self.m_bsphere = mi.BoundingSphere3f(mi.Point3f(0), 1)
         self.m_surface_area = 4.0 * dr.pi
 
-        #self.m_radiance: mi.Texture = props.get("radiance")
-        #dr.assert_false(self.m_radiance.is_spatially_varying())
-
-        self.m_sun_dir = dr.normalize(props.get("sun_dir", mi.Vector3f(dr.sin(dr.pi/5), 0, dr.cos(dr.pi/5))))
+        self.m_sun_dir = dr.normalize(props.get("sun_dir", mi.Vector3f(dr.cos(dr.pi/5), 0, dr.sin(dr.pi/5))))
         self.m_albedo = props.get("albedo", 0.5)
         self.m_turb = props.get("turbidity", 6)
 
@@ -27,7 +24,7 @@ class SunskyEmitter(mi.Emitter):
             self.wavelengths = mi.Spectrum([320, 360, 400, 420, 460, 520, 560, 600, 640, 680, 720])
             self.wavelength_step = 40
 
-
+        # TODO get to_world from props
         self.m_up_frame = mi.Frame3f(mi.Vector3f(0, 0, 1))
         sun_elevation = dr.pi/2 - dr.acos(self.m_up_frame.cos_theta(self.m_sun_dir))
 
@@ -47,36 +44,43 @@ class SunskyEmitter(mi.Emitter):
 
         self.m_surface_area = 4.0 * dr.pi * self.m_bsphere.radius**2
 
+
+    def render_channel(self, i, theta, gamma):
+        coefs = dr.gather(mi.Float, self.m_params, i*9 + dr.arange(mi.UInt32, 9))
+        return get_rad(coefs, theta, gamma) * self.m_rad[i]
+
+
     @dr.syntax
     def eval(self, si, active=True):
         gamma = dr.acos(dr.dot(si.wi, self.m_sun_dir))
         theta = dr.acos(self.m_up_frame.cos_theta(si.wi))
 
-        if mi.is_rgb:
-            res = dr.zeros(mi.Spectrum, len(gamma))
-            res.x = get_rad(self.m_params[0], theta, gamma) * self.m_rad[0]
-            res.y = get_rad(self.m_params[1], theta, gamma) * self.m_rad[1]
-            res.z = get_rad(self.m_params[2], theta, gamma) * self.m_rad[2]
-            return res
+        res = dr.zeros(mi.Spectrum)
+
+        if mi.is_rgb: # TODO optimize RGB with active
+            res = dr.zeros(mi.Spectrum)
+            res[0] = self.render_channel(0, theta, gamma)
+            res[1] = self.render_channel(1, theta, gamma)
+            res[2] = self.render_channel(2, theta, gamma)
 
         else:
-            res = dr.zeros(mi.Spectrum, len(gamma))
+            normalized_wavelengths = (si.wavelengths - self.wavelengths[0]) / self.wavelength_step
+            query_indices = mi.Int(dr.floor(normalized_wavelengths))
+
+            lerp_factor = (normalized_wavelengths - query_indices)
 
             i = 0
             while active and i < len(si.wavelengths):
-                query_val = si.wavelengths[i]
-                query_idx = mi.Int((query_val - self.wavelengths[0]) / self.wavelength_step)
-                if query_idx < 0 or query_idx > len(self.wavelengths) - 1:
+                query_idx = query_indices[i]
+                if query_idx < 0 or query_idx >= len(self.wavelengths):
                     res[i] = 0
                 else:
-                    coefs = dr.gather(mi.Float, self.m_params, query_idx * 9 + dr.arange(mi.Float, 9))
-                    temp = get_rad(coefs, theta, gamma) * self.m_rad[query_idx]
-
+                    res[i] = dr.lerp(self.render_channel(query_idx, theta, gamma),
+                                     self.render_channel(dr.minimum(query_idx + 1, 10), theta, gamma),
+                                     lerp_factor)
                 i += 1
 
-
-        # TODO construct spectrum
-        return mi.depolarizer(self.m_radiance.eval(si, active))
+        return res
 
     def sample_ray(self, time, wavelength_sample, sample_2, sample_3, active=True):
         # Spacial sampling
@@ -120,7 +124,7 @@ class SunskyEmitter(mi.Emitter):
         si = dr.zeros(mi.SurfaceInteraction3f)
         si.wavelengths = it.wavelengths
 
-        return ds, mi.depolarizer(self.m_radiance.eval(si, active)) / ds.pdf
+        return ds, self.eval(si, active) / ds.pdf
 
     def pdf_direction(self, it, ds, active=True):
         return mi.warp.square_to_uniform_sphere_pdf(ds.d)
@@ -129,9 +133,10 @@ class SunskyEmitter(mi.Emitter):
     def eval_direction(self, it, ds, active=True):
         si = dr.zeros(mi.SurfaceInteraction3f)
         si.wavelengths = it.wavelengths
-        return mi.depolarizer(self.m_radiance.eval(si, active))
+        return mi.depolarizer(self.eval(si, active))
 
     def sample_wavelengths(self, si, sample, active = True):
+        # TODO implement
         return self.m_radiance.sample_spectrum(si, mi.sample_shifted(sample), active)
 
     def sample_position(self, ref, ds, active = True):
