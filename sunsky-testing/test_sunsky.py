@@ -47,8 +47,8 @@ def render_sun():
 
 
 def render_suite():
-    _, dataset_rad = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_rgb_rad.bin")
-    _, dataset = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_rgb.bin")
+    _, dataset_rad = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v2_rgb_rad.bin")
+    _, dataset = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v2_rgb.bin")
 
     resolution = (256*4, 256)
 
@@ -91,7 +91,7 @@ def test_plot_spectral():
 
 
 if __name__ == "__main__":
-    mi.write_sky_model_data_v1("sunsky-testing/res/datasets/ssm_dataset")
+    mi.write_sky_model_data_v2("sunsky-testing/res/datasets/ssm_dataset")
 
     test_mean_radiance_data()
     test_radiance_data()

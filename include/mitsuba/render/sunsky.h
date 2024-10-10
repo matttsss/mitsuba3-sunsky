@@ -62,6 +62,79 @@ NAMESPACE_BEGIN(mitsuba)
     };
 
 
+    void write_tensor_data_v2(const std::string &path, const Dataset& dataset) {
+        const auto [nb_dims, dim_size, p_dataset] = dataset;
+        FileStream file(path, FileStream::EMode::ETruncReadWrite);
+
+        // Write headers
+        file.write("SKY", 3);
+        file.write((uint32_t)1);
+
+        // Write tensor dimensions
+        file.write(nb_dims);
+
+        size_t tensor_size = 1;
+        for (size_t dim = 0; dim < nb_dims; ++dim)
+            tensor_size *= dim_size[dim];
+
+
+        // Write reordered shapes
+        file.write(dim_size[TURBIDITY]);
+        file.write(dim_size[ALBEDO]);
+        file.write(dim_size[CTRL_PT]);
+        file.write(dim_size[WAVELENGTH]);
+
+        if (nb_dims == F_DIM)
+            file.write(dim_size[PARAMS]);
+
+
+        const size_t nb_params = nb_dims == F_DIM ? NB_PARAMS : 1,
+                     nb_colors = dim_size[WAVELENGTH];
+
+        double* buffer = (double*)calloc(tensor_size, sizeof(double));
+
+        // Converts from (11 x 2 x 10 x 6 x ...) to (10 x 2 x 6 x 11 x ...)
+        for (size_t t = 0; t < NB_TURBIDITY; ++t) {
+
+            for (size_t a = 0; a < 2; ++a) {
+
+                for (size_t ctrl_idx = 0; ctrl_idx < NB_CTRL_PT; ++ctrl_idx) {
+
+                    for (size_t color_idx = 0; color_idx < nb_colors; ++color_idx) {
+
+                        for (size_t param_idx = 0; param_idx < nb_params; ++param_idx) {
+                            size_t dest_global_offset = t * (2 * NB_CTRL_PT * nb_colors * nb_params) +
+                                                        a * (NB_CTRL_PT * nb_colors * nb_params) +
+                                                        ctrl_idx * nb_colors * nb_params +
+                                                        color_idx * nb_params +
+                                                        param_idx;
+                            size_t src_global_offset = a * (NB_TURBIDITY * NB_CTRL_PT * nb_params) +
+                                                       t * (NB_CTRL_PT * nb_params) +
+                                                       ctrl_idx * nb_params +
+                                                       param_idx;
+                            buffer[dest_global_offset] = p_dataset[color_idx][src_global_offset];
+
+                        }
+                    }
+                }
+            }
+        }
+
+        // Write the data from the dataset
+        file.write_array(buffer, tensor_size);
+
+        free(buffer);
+        file.close();
+    }
+
+    void write_sky_model_data_v2(const std::string &path) {
+        write_tensor_data_v2(path + "_v2_spec.bin", f_spectral);
+        write_tensor_data_v2(path + "_v2_spec_rad.bin", l_spectral);
+        write_tensor_data_v2(path + "_v2_rgb.bin", f_RGB);
+        write_tensor_data_v2(path + "_v2_rgb_rad.bin", l_RGB);
+    }
+
+
     void write_tensor_data_v1(const std::string &path, const Dataset& dataset) {
         const auto [nb_dims, dim_size, p_dataset] = dataset;
         FileStream file(path, FileStream::EMode::ETruncReadWrite);

@@ -67,12 +67,12 @@ def get_params(dataset: mi.Float, t: mi.Int | mi.Float, a: mi.Int | mi.Float, et
     t_high = dr.minimum(t_low + 1, 9)
     t_rem = t - t_int
 
-    a_block_size = len(dataset) // 2
-    t_block_size = a_block_size // 10
+    t_block_size = len(dataset) // 10
+    a_block_size = t_block_size // 2
 
-    res  = (1 - t_rem) * (1 - a) * bezier_interpolate(dataset, t_block_size, 0 * a_block_size + t_low  * t_block_size, x)
-    res += t_rem       * (1 - a) * bezier_interpolate(dataset, t_block_size, 0 * a_block_size + t_high * t_block_size, x)
-    res += (1 - t_rem) * a       * bezier_interpolate(dataset, t_block_size, 1 * a_block_size + t_low  * t_block_size, x)
-    res += t_rem       * a       * bezier_interpolate(dataset, t_block_size, 1 * a_block_size + t_high * t_block_size, x)
+    res  = (1 - t_rem) * (1 - a) * bezier_interpolate(dataset, a_block_size, t_low  * t_block_size + 0 * a_block_size, x)
+    res += (1 - t_rem) * a       * bezier_interpolate(dataset, a_block_size, t_low  * t_block_size + 1 * a_block_size, x)
+    res += t_rem       * (1 - a) * bezier_interpolate(dataset, a_block_size, t_high * t_block_size + 0 * a_block_size, x)
+    res += t_rem       * a       * bezier_interpolate(dataset, a_block_size, t_high * t_block_size + 1 * a_block_size, x)
 
     return res
