@@ -12,13 +12,13 @@ class SunskyEmitter(mi.Emitter):
         self.m_bsphere = mi.BoundingSphere3f(mi.Point3f(0), 1)
         self.m_surface_area = 4.0 * dr.pi
 
-        self.m_sun_dir = dr.normalize(props.get("sun_dir", mi.Vector3f(dr.cos(dr.pi/5), 0, dr.sin(dr.pi/5))))
+        self.m_sun_dir = dr.normalize(props.get("sun_dir", mi.Vector3f(dr.sin(0.5 * dr.pi * 70/100), 0, dr.cos(0.5 * dr.pi * 70/100))))
         self.m_albedo = props.get("albedo", 0.5)
         self.m_turb = props.get("turbidity", 6)
 
         dataset_name = props.get("dataset_name", "sunsky-testing/res/ssm_dataset_v1_rgb")
-        _, database = mi.tensor_from_file(dataset_name + ".bin")
-        _, database_rad = mi.tensor_from_file(dataset_name + "_rad.bin")
+        _, database = mi.array_from_file(dataset_name + ".bin")
+        _, database_rad = mi.array_from_file(dataset_name + "_rad.bin")
 
         if mi.is_spectral:
             self.wavelengths = mi.Spectrum([320, 360, 400, 420, 460, 520, 560, 600, 640, 680, 720])
@@ -29,7 +29,7 @@ class SunskyEmitter(mi.Emitter):
         sun_elevation = dr.pi/2 - dr.acos(self.m_up_frame.cos_theta(self.m_sun_dir))
 
         self.m_params = get_params(database, self.m_turb, self.m_albedo, sun_elevation)
-        self.m_rad: mi.Float = get_params(database_rad, self.m_turb, self.m_albedo, sun_elevation)
+        self.m_rad = get_params(database_rad, self.m_turb, self.m_albedo, sun_elevation)
 
         self.m_flags = mi.EmitterFlags.Infinite | mi.EmitterFlags.SpatiallyVarying
 
@@ -45,23 +45,32 @@ class SunskyEmitter(mi.Emitter):
         self.m_surface_area = 4.0 * dr.pi * self.m_bsphere.radius**2
 
 
-    def render_channel(self, i, theta, gamma):
+    def render_channel(self, i, cos_theta, cos_gamma):
         coefs = dr.gather(mi.Float, self.m_params, i*9 + dr.arange(mi.UInt32, 9))
-        return get_rad(coefs, theta, gamma) * self.m_rad[i]
+        gamma = dr.acos(cos_gamma)
+        cos_gamma_sqr = dr.square(cos_gamma)
+
+        c1 = 1 + coefs[0] * dr.exp(coefs[1] / (cos_theta + 0.01))
+        chi = (1 + cos_gamma_sqr) / dr.power(1 + dr.square(coefs[7]) - 2 * coefs[7] * cos_gamma, 1.5)
+        c2 = coefs[2] + coefs[3] * dr.exp(coefs[4] * gamma) + coefs[5] * cos_gamma_sqr + coefs[6] * chi + coefs[8] * dr.sqrt(cos_theta)
+
+
+        return dr.select(cos_theta >= 0, c1 * c2 * self.m_rad[i], 0)
 
 
     @dr.syntax
     def eval(self, si, active=True):
-        gamma = dr.acos(dr.dot(si.wi, self.m_sun_dir))
-        theta = dr.acos(self.m_up_frame.cos_theta(si.wi))
+        world_wi = dr.normalize(si.to_world(si.wi))
+        cos_theta = self.m_up_frame.cos_theta(world_wi)
+        cos_gamma = dr.dot(self.m_sun_dir, world_wi)
 
         res = dr.zeros(mi.Spectrum)
 
         if mi.is_rgb: # TODO optimize RGB with active
             res = dr.zeros(mi.Spectrum)
-            res[0] = self.render_channel(0, theta, gamma)
-            res[1] = self.render_channel(1, theta, gamma)
-            res[2] = self.render_channel(2, theta, gamma)
+            res[0] = self.render_channel(0, cos_theta, cos_gamma)
+            res[1] = self.render_channel(1, cos_theta, cos_gamma)
+            res[2] = self.render_channel(2, cos_theta, cos_gamma)
 
         else:
             normalized_wavelengths = (si.wavelengths - self.wavelengths[0]) / self.wavelength_step
@@ -75,9 +84,9 @@ class SunskyEmitter(mi.Emitter):
                 if query_idx < 0 or query_idx >= len(self.wavelengths):
                     res[i] = 0
                 else:
-                    res[i] = dr.lerp(self.render_channel(query_idx, theta, gamma),
-                                     self.render_channel(dr.minimum(query_idx + 1, 10), theta, gamma),
-                                     lerp_factor)
+                    res[i] = dr.lerp(self.render_channel(query_idx, cos_theta, cos_gamma),
+                                     self.render_channel(dr.minimum(query_idx + 1, 10), cos_theta, cos_gamma),
+                                     lerp_factor[i])
                 i += 1
 
         return res
@@ -133,11 +142,16 @@ class SunskyEmitter(mi.Emitter):
     def eval_direction(self, it, ds, active=True):
         si = dr.zeros(mi.SurfaceInteraction3f)
         si.wavelengths = it.wavelengths
-        return mi.depolarizer(self.eval(si, active))
+        return self.eval(si, active)
 
     def sample_wavelengths(self, si, sample, active = True):
-        # TODO implement
-        return self.m_radiance.sample_spectrum(si, mi.sample_shifted(sample), active)
+        min_lbda = dr.maximum(self.wavelengths[0], mi.MI_CIE_MIN)
+        max_lbda = dr.minimum(self.wavelengths[-1], mi.MI_CIE_MAX)
+        inv_pdf = max_lbda - min_lbda
+
+        # TODO, is the size of the array returned by sample_shifted allways the same as the nb of wavelengths?
+        si.wavelengths = mi.sample_shifted(sample) * inv_pdf + min_lbda
+        return si.wavelengths, inv_pdf * self.eval(si, active)
 
     def sample_position(self, ref, ds, active = True):
         dr.assert_true(False, "Sample position not implemented")

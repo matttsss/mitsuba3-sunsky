@@ -81,17 +81,12 @@ NAMESPACE_BEGIN(mitsuba)
         // Write reordered shapes
         file.write(dim_size[ALBEDO]);
         file.write(dim_size[TURBIDITY]);
+        file.write(dim_size[CTRL_PT]);
+        file.write(dim_size[WAVELENGTH]);
 
-        if (nb_dims == F_DIM) {
-            file.write(dim_size[CTRL_PT]);
-            file.write(dim_size[WAVELENGTH]);
+        if (nb_dims == F_DIM)
             file.write(dim_size[PARAMS]);
-        } else if (nb_dims == L_DIM) {
-            file.write(dim_size[CTRL_PT]);
-            file.write(dim_size[WAVELENGTH]);
-        } else {
-            Throw("Incorrect number of dimensions");
-        }
+
 
         const size_t nb_params = nb_dims == F_DIM ? NB_PARAMS : 1,
                      nb_colors = dim_size[WAVELENGTH];
