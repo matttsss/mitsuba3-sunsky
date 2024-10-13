@@ -47,10 +47,8 @@ class SunskyEmitter(mi.Emitter):
         self.m_surface_area = 4.0 * dr.pi * self.m_bsphere.radius**2
 
 
-    def render_channel(self, idx: int, cos_theta: mi.Float, cos_gamma: mi.Float, active: mi.Bool):
-        # FIXME cannot gather (9 x wavefront) into mi.Float
-        # Would need some "mi.Vector9f" type?
-        coefs = dr.gather(mi.Float, self.m_params, idx*9 + dr.arange(mi.UInt32, 9), active)
+    def render_channel(self, idx: mi.UInt32, cos_theta: mi.Float, cos_gamma: mi.Float, active: mi.Bool):
+        coefs = [dr.gather(mi.Float, self.m_params, idx*9 + i, active) for i in range(9)]
 
         gamma = dr.acos(cos_gamma)
         cos_gamma_sqr = dr.square(cos_gamma)
@@ -59,7 +57,7 @@ class SunskyEmitter(mi.Emitter):
         chi = (1 + cos_gamma_sqr) / dr.power(1 + dr.square(coefs[8]) - 2 * coefs[8] * cos_gamma, 1.5)
         c2 = coefs[2] + coefs[3] * dr.exp(coefs[4] * gamma) + coefs[5] * cos_gamma_sqr + coefs[6] * chi + coefs[7] * dr.sqrt(cos_theta)
 
-        return (c1 * c2 * self.m_rad[idx]) & (cos_theta >= 0)
+        return (c1 * c2 * dr.gather(mi.Float, self.m_rad, idx, active)) & active
 
     @dr.syntax
     def eval(self, si, active=True):
@@ -83,7 +81,7 @@ class SunskyEmitter(mi.Emitter):
                 idx = query_indices[i]
 
                 # Deactivate wrong indices, (no need to check "< 0" since they are unsigned)
-                mask = active & (idx < len(si.wavelengths))
+                mask = active & (idx < len(si.wavelengths)) & (cos_theta > 0)
 
                 res[i] = dr.lerp(self.render_channel(idx, cos_theta, cos_gamma, mask),
                                  self.render_channel(dr.minimum(idx + 1, 10), cos_theta, cos_gamma, mask),
@@ -150,7 +148,6 @@ class SunskyEmitter(mi.Emitter):
         max_lbda = dr.minimum(self.wavelengths[-1], mi.MI_CIE_MAX)
         inv_pdf = max_lbda - min_lbda
 
-        # TODO, is the size of the array returned by sample_shifted allways the same as the nb of wavelengths?
         si.wavelengths = mi.sample_shifted(sample) * inv_pdf + min_lbda
         return si.wavelengths, inv_pdf * self.eval(si, active)
 
