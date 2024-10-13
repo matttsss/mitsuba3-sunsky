@@ -58,14 +58,9 @@ def render_suite():
     r10 = dr.pi/2 * (10/100)
     r5 = dr.pi/2 * (5/100)
 
-    for eta in [r5, r10, r30, r50, r70]:
-        t, a = 6, 0.5
-        res = test_render(dataset, dataset_rad, resolution, t, a, eta)
-        mi.util.write_bitmap(f"sunsky-testing/res/renders/sm_t{t}_a{a}_eta{int(eta * 2 * dr.inv_pi * 100)}.exr", res)
-
     for t in range(1, 11):
-        eta, a = r30, 0.5
-        res = test_render(dataset, dataset_rad, resolution, t, a, eta)
+        eta, a = r5, 0.5
+        res = test_render(dataset, dataset_rad, resolution, t, a, r5/10)
         mi.util.write_bitmap(f"sunsky-testing/res/renders/sm_t{t}_a{a}_eta{int(eta * 2 * dr.inv_pi * 100)}.exr", res)
 
 def test_plot_spectral():

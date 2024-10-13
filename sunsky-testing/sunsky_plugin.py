@@ -3,7 +3,6 @@ import mitsuba as mi
 
 from sunsky_data import get_params, get_rad
 
-
 class SunskyEmitter(mi.Emitter):
 
     def __init__(self, props):
@@ -12,22 +11,25 @@ class SunskyEmitter(mi.Emitter):
         self.m_bsphere = mi.BoundingSphere3f(mi.Point3f(0), 1)
         self.m_surface_area = 4.0 * dr.pi
 
-        self.m_sun_dir = dr.normalize(props.get("sun_dir", mi.Vector3f(dr.sin(0.5 * dr.pi * 70/100), 0, dr.cos(0.5 * dr.pi * 70/100))))
         self.m_albedo = props.get("albedo", 0.5)
         self.m_turb = props.get("turbidity", 6)
 
-        dataset_name = props.get("dataset_name", "sunsky-testing/res/ssm_dataset_v1_rgb")
-        _, database = mi.array_from_file(dataset_name + ".bin")
-        _, database_rad = mi.array_from_file(dataset_name + "_rad.bin")
+        self.m_up = props.get("to_world", mi.Transform4f(1)) @ mi.Vector3f(0, 0, 1)
+        self.m_sun_dir = dr.normalize(props.get("sun_dir", mi.Vector3f(dr.sin(dr.pi * 7/20), 0, dr.cos(dr.pi * 7/20))))
+        sun_elevation = dr.pi/2 - dr.acos(self.m_sun_dir.z)
+
 
         if mi.is_spectral:
-            self.wavelengths = mi.Spectrum([320, 360, 400, 420, 460, 520, 560, 600, 640, 680, 720])
+            dataset_name = props.get("dataset_name", "sunsky-testing/res/ssm_dataset_v2_spec")
+
+            self.wavelengths = [320, 360, 400, 420, 460, 520, 560, 600, 640, 680, 720]
             self.wavelength_step = 40
 
-        # TODO get to_world from props
-        self.m_up_frame = mi.Frame3f(mi.Vector3f(0, 0, 1))
-        sun_elevation = dr.pi/2 - dr.acos(self.m_up_frame.cos_theta(self.m_sun_dir))
+        elif mi.is_rgb:
+            dataset_name = props.get("dataset_name", "sunsky-testing/res/ssm_dataset_v2_rgb")
 
+        _, database = mi.array_from_file(dataset_name + ".bin")
+        _, database_rad = mi.array_from_file(dataset_name + "_rad.bin")
         self.m_params = get_params(database, self.m_turb, self.m_albedo, sun_elevation)
         self.m_rad = get_params(database_rad, self.m_turb, self.m_albedo, sun_elevation)
 
@@ -45,51 +47,50 @@ class SunskyEmitter(mi.Emitter):
         self.m_surface_area = 4.0 * dr.pi * self.m_bsphere.radius**2
 
 
-    def render_channel(self, i, cos_theta, cos_gamma):
-        coefs = dr.gather(mi.Float, self.m_params, i*9 + dr.arange(mi.UInt32, 9))
+    def render_channel(self, idx: int, cos_theta: mi.Float, cos_gamma: mi.Float, active: mi.Bool):
+        # FIXME cannot gather (9 x wavefront) into mi.Float
+        # Would need some "mi.Vector9f" type?
+        coefs = dr.gather(mi.Float, self.m_params, idx*9 + dr.arange(mi.UInt32, 9), active)
+
         gamma = dr.acos(cos_gamma)
         cos_gamma_sqr = dr.square(cos_gamma)
 
         c1 = 1 + coefs[0] * dr.exp(coefs[1] / (cos_theta + 0.01))
-        chi = (1 + cos_gamma_sqr) / dr.power(1 + dr.square(coefs[7]) - 2 * coefs[7] * cos_gamma, 1.5)
-        c2 = coefs[2] + coefs[3] * dr.exp(coefs[4] * gamma) + coefs[5] * cos_gamma_sqr + coefs[6] * chi + coefs[8] * dr.sqrt(cos_theta)
+        chi = (1 + cos_gamma_sqr) / dr.power(1 + dr.square(coefs[8]) - 2 * coefs[8] * cos_gamma, 1.5)
+        c2 = coefs[2] + coefs[3] * dr.exp(coefs[4] * gamma) + coefs[5] * cos_gamma_sqr + coefs[6] * chi + coefs[7] * dr.sqrt(cos_theta)
 
-
-        return dr.select(cos_theta >= 0, c1 * c2 * self.m_rad[i], 0)
-
+        return (c1 * c2 * self.m_rad[idx]) & (cos_theta >= 0)
 
     @dr.syntax
     def eval(self, si, active=True):
-        world_wi = dr.normalize(si.to_world(si.wi))
-        cos_theta = self.m_up_frame.cos_theta(world_wi)
-        cos_gamma = dr.dot(self.m_sun_dir, world_wi)
+        cos_theta = dr.dot(self.m_up, -si.wi)
+        cos_gamma = dr.dot(self.m_sun_dir, -si.wi)
 
         res = dr.zeros(mi.Spectrum)
-
-        if mi.is_rgb: # TODO optimize RGB with active
-            res = dr.zeros(mi.Spectrum)
-            res[0] = self.render_channel(0, cos_theta, cos_gamma)
-            res[1] = self.render_channel(1, cos_theta, cos_gamma)
-            res[2] = self.render_channel(2, cos_theta, cos_gamma)
+        if dr.hint(mi.is_rgb, mode="scalar"):
+            res[0] = self.render_channel(0, cos_theta, cos_gamma, active)
+            res[1] = self.render_channel(1, cos_theta, cos_gamma, active)
+            res[2] = self.render_channel(2, cos_theta, cos_gamma, active)
 
         else:
             normalized_wavelengths = (si.wavelengths - self.wavelengths[0]) / self.wavelength_step
-            query_indices = mi.Int(dr.floor(normalized_wavelengths))
+            query_indices = dr.uint32_array_t(mi.Spectrum)(dr.floor(normalized_wavelengths))
 
-            lerp_factor = (normalized_wavelengths - query_indices)
+            # Get fractional part of the indices
+            lerp_factor = normalized_wavelengths - query_indices
 
-            i = 0
-            while active and i < len(si.wavelengths):
-                query_idx = query_indices[i]
-                if query_idx < 0 or query_idx >= len(self.wavelengths):
-                    res[i] = 0
-                else:
-                    res[i] = dr.lerp(self.render_channel(query_idx, cos_theta, cos_gamma),
-                                     self.render_channel(dr.minimum(query_idx + 1, 10), cos_theta, cos_gamma),
-                                     lerp_factor[i])
-                i += 1
+            for i in range(len(si.wavelengths)):
+                idx = query_indices[i]
+
+                # Deactivate wrong indices, (no need to check "< 0" since they are unsigned)
+                mask = active & (idx < len(si.wavelengths))
+
+                res[i] = dr.lerp(self.render_channel(idx, cos_theta, cos_gamma, mask),
+                                 self.render_channel(dr.minimum(idx + 1, 10), cos_theta, cos_gamma, mask),
+                                 lerp_factor[i])
 
         return res
+
 
     def sample_ray(self, time, wavelength_sample, sample_2, sample_3, active=True):
         # Spacial sampling
