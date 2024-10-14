@@ -60,12 +60,16 @@ def get_params(dataset: mi.Float, t: mi.Int | mi.Float, a: mi.Int | mi.Float, et
     dr.assert_true(0 <= a <= 1, "Albedo (a) value is not between 0 and 1: %f", a)
     dr.assert_true(1 <= t <= 10, "Turbidity value is not between 0 and 10: %f", t)
 
+    t = dr.clip(t, 1, 10)
+    a = dr.clip(a, 0, 1)
+    eta = dr.clip(eta, 0, 0.5 * dr.pi)
+
     x: mi.Float = dr.power(2 * dr.inv_pi * eta, 1/3)
 
-    t_int = mi.UInt32(dr.floor(t))
-    t_low = t_int - 1
+    t_int  = mi.UInt32(dr.floor(t))
+    t_low  = dr.maximum(t_int - 1, 0)
     t_high = dr.minimum(t_low + 1, 9)
-    t_rem = t - t_int
+    t_rem  = t - t_int
 
     t_block_size = len(dataset) // 10
     a_block_size = t_block_size // 2
@@ -75,4 +79,4 @@ def get_params(dataset: mi.Float, t: mi.Int | mi.Float, a: mi.Int | mi.Float, et
     res += t_rem       * (1 - a) * bezier_interpolate(dataset, a_block_size, t_high * t_block_size + 0 * a_block_size, x)
     res += t_rem       * a       * bezier_interpolate(dataset, a_block_size, t_high * t_block_size + 1 * a_block_size, x)
 
-    return res
+    return res & ((1 <= t <= 10) & (0 <= a <= 1) & (0 <= eta <= 0.5 * dr.pi))

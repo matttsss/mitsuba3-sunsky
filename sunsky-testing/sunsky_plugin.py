@@ -3,8 +3,17 @@ import mitsuba as mi
 
 from sunsky_data import get_params
 
-# FIXME find correct declaration for ad variants as well
-ARR_TYPE = dr.llvm.ArrayXf if mi.variant() == "llvm_rgb" else dr.cuda.ArrayXf
+def get_class(name):
+    name = name.split('.')
+    value = __import__(".".join(name[:-1]))
+    for item in name[1:]:
+        value = getattr(value, item)
+    return value
+
+def get_module(class_):
+    return get_class(class_.__module__)
+
+ArrayXf = get_module(mi.Float).ArrayXf
 
 class SunskyEmitter(mi.Emitter):
 
@@ -35,6 +44,8 @@ class SunskyEmitter(mi.Emitter):
         self.m_params = get_params(database, self.m_turb, self.m_albedo, sun_elevation)
         self.m_rad = get_params(database_rad, self.m_turb, self.m_albedo, sun_elevation)
 
+        dr.eval(self.m_params, self.m_rad)
+
         self.m_flags = mi.EmitterFlags.Infinite | mi.EmitterFlags.SpatiallyVarying
 
     def set_scene(self, scene):
@@ -51,13 +62,8 @@ class SunskyEmitter(mi.Emitter):
 
     def render_channel(self, idx: mi.UInt32, cos_theta: mi.Float, cos_gamma: mi.Float, active: mi.Bool):
 
-        # ARR_TYPE is declared at the top of this file
-        #coefs = dr.gather(ARR_TYPE, self.m_params, idx*9, active, shape=(9, -1))           # First option (prefered)
-        coefs = [dr.gather(mi.Float, self.m_params, idx*9 + i, active) for i in range(9)]   # Second option
-
-        # a = self.m_params[0]
-        # Un-commenting the line above will get drjit produce a different when using the first option:
-        # RuntimeError: jit_var_gather(): out-of-bounds read from position 81 in an array of size 27.
+        coefs = dr.gather(ArrayXf, self.m_params, idx*9, active, shape=(9, -1))
+        #coefs = [dr.gather(mi.Float, self.m_params, idx*9 + i, active) for i in range(9)]
 
         gamma = dr.acos(cos_gamma)
         cos_gamma_sqr = dr.square(cos_gamma)
