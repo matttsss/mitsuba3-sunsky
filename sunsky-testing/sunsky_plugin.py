@@ -1,7 +1,10 @@
 import drjit as dr
 import mitsuba as mi
 
-from sunsky_data import get_params, get_rad
+from sunsky_data import get_params
+
+# FIXME find correct declaration
+ARR_TYPE = dr.llvm.ArrayXf if mi.variant() == "llvm_rgb" else dr.cuda.ArrayXf
 
 class SunskyEmitter(mi.Emitter):
 
@@ -14,10 +17,9 @@ class SunskyEmitter(mi.Emitter):
         self.m_albedo = props.get("albedo", 0.5)
         self.m_turb = props.get("turbidity", 6)
 
+        sun_elevation = 0.5 * dr.pi * (2/100)
         self.m_up = props.get("to_world", mi.Transform4f(1)) @ mi.Vector3f(0, 0, 1)
-        self.m_sun_dir = dr.normalize(props.get("sun_dir", mi.Vector3f(dr.sin(dr.pi * 7/20), 0, dr.cos(dr.pi * 7/20))))
-        sun_elevation = dr.pi/2 - dr.acos(self.m_sun_dir.z)
-
+        self.m_sun_dir = mi.Vector3f(dr.cos(sun_elevation), 0, dr.sin(sun_elevation))
 
         if mi.is_spectral:
             dataset_name = props.get("dataset_name", "sunsky-testing/res/ssm_dataset_v2_spec")
@@ -48,7 +50,8 @@ class SunskyEmitter(mi.Emitter):
 
 
     def render_channel(self, idx: mi.UInt32, cos_theta: mi.Float, cos_gamma: mi.Float, active: mi.Bool):
-        coefs = [dr.gather(mi.Float, self.m_params, idx*9 + i, active) for i in range(9)]
+        coefs = dr.gather(ARR_TYPE, self.m_params, idx*9, active, shape=(9, -1))
+        #coefs = [dr.gather(mi.Float, self.m_params, idx*9 + i, active) for i in range(9)]
 
         gamma = dr.acos(cos_gamma)
         cos_gamma_sqr = dr.square(cos_gamma)
@@ -57,12 +60,14 @@ class SunskyEmitter(mi.Emitter):
         chi = (1 + cos_gamma_sqr) / dr.power(1 + dr.square(coefs[8]) - 2 * coefs[8] * cos_gamma, 1.5)
         c2 = coefs[2] + coefs[3] * dr.exp(coefs[4] * gamma) + coefs[5] * cos_gamma_sqr + coefs[6] * chi + coefs[7] * dr.sqrt(cos_theta)
 
-        return (c1 * c2 * dr.gather(mi.Float, self.m_rad, idx, active)) & active
+        return c1 * c2 * dr.gather(mi.Float, self.m_rad, idx, active) & (cos_theta >= 0)
 
     @dr.syntax
     def eval(self, si, active=True):
         cos_theta = dr.dot(self.m_up, -si.wi)
         cos_gamma = dr.dot(self.m_sun_dir, -si.wi)
+
+        active &= cos_theta >= 0
 
         res = dr.zeros(mi.Spectrum)
         if dr.hint(mi.is_rgb, mode="scalar"):
@@ -81,7 +86,7 @@ class SunskyEmitter(mi.Emitter):
                 idx = query_indices[i]
 
                 # Deactivate wrong indices, (no need to check "< 0" since they are unsigned)
-                mask = active & (idx < len(si.wavelengths)) & (cos_theta > 0)
+                mask = active & (idx < len(self.wavelengths))
 
                 res[i] = dr.lerp(self.render_channel(idx, cos_theta, cos_gamma, mask),
                                  self.render_channel(dr.minimum(idx + 1, 10), cos_theta, cos_gamma, mask),

@@ -5,7 +5,7 @@ import drjit as dr
 dr.set_flag(dr.JitFlag.Debug, True)
 
 import mitsuba as mi
-mi.set_variant("cuda_spectral")
+mi.set_variant("llvm_rgb")
 
 
 from sunsky_plugin import SunskyEmitter
