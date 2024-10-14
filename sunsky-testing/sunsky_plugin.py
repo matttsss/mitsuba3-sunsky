@@ -3,7 +3,7 @@ import mitsuba as mi
 
 from sunsky_data import get_params
 
-# FIXME find correct declaration
+# FIXME find correct declaration for ad variants as well
 ARR_TYPE = dr.llvm.ArrayXf if mi.variant() == "llvm_rgb" else dr.cuda.ArrayXf
 
 class SunskyEmitter(mi.Emitter):
@@ -50,8 +50,14 @@ class SunskyEmitter(mi.Emitter):
 
 
     def render_channel(self, idx: mi.UInt32, cos_theta: mi.Float, cos_gamma: mi.Float, active: mi.Bool):
-        coefs = dr.gather(ARR_TYPE, self.m_params, idx*9, active, shape=(9, -1))
-        #coefs = [dr.gather(mi.Float, self.m_params, idx*9 + i, active) for i in range(9)]
+
+        # ARR_TYPE is declared at the top of this file
+        #coefs = dr.gather(ARR_TYPE, self.m_params, idx*9, active, shape=(9, -1))           # First option (prefered)
+        coefs = [dr.gather(mi.Float, self.m_params, idx*9 + i, active) for i in range(9)]   # Second option
+
+        # a = self.m_params[0]
+        # Un-commenting the line above will get drjit produce a different when using the first option:
+        # RuntimeError: jit_var_gather(): out-of-bounds read from position 81 in an array of size 27.
 
         gamma = dr.acos(cos_gamma)
         cos_gamma_sqr = dr.square(cos_gamma)
@@ -68,6 +74,9 @@ class SunskyEmitter(mi.Emitter):
         cos_gamma = dr.dot(self.m_sun_dir, -si.wi)
 
         active &= cos_theta >= 0
+
+        # Same comment as line 58
+        # a = self.m_params[0]
 
         res = dr.zeros(mi.Spectrum)
         if dr.hint(mi.is_rgb, mode="scalar"):
