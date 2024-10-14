@@ -81,9 +81,6 @@ class SunskyEmitter(mi.Emitter):
 
         active &= cos_theta >= 0
 
-        # Same comment as line 58
-        # a = self.m_params[0]
-
         res = dr.zeros(mi.Spectrum)
         if dr.hint(mi.is_rgb, mode="scalar"):
             res[0] = self.render_channel(0, cos_theta, cos_gamma, active)
