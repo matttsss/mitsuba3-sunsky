@@ -61,9 +61,7 @@ class SunskyEmitter(mi.Emitter):
 
 
     def render_channel(self, idx: mi.UInt32, cos_theta: mi.Float, cos_gamma: mi.Float, active: mi.Bool):
-
-        coefs = dr.gather(ArrayXf, self.m_params, idx*9, active, shape=(9, -1))
-        #coefs = [dr.gather(mi.Float, self.m_params, idx*9 + i, active) for i in range(9)]
+        coefs = dr.gather(ArrayXf, self.m_params, idx, active, shape=(9, 1))
 
         gamma = dr.acos(cos_gamma)
         cos_gamma_sqr = dr.square(cos_gamma)
