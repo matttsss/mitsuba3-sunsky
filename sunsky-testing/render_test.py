@@ -8,16 +8,15 @@ import mitsuba as mi
 mi.set_variant("llvm_rgb")
 
 
-from sunsky_plugin import SunskyEmitter
+from rendering.sunsky_plugin import SunskyEmitter
+from rendering.spherical_sensor import SphericalSensor
 
-mi.register_emitter("constant_emitter", SunskyEmitter)
-
-def render():
+def render_scene(scene_name):
     dr.print("Rendering test scene")
 
-    scene = mi.load_file("sunsky-testing/res/scene/simple.xml")
+    scene = mi.load_file(f"../scenes/{scene_name}.xml")
     image = mi.render(scene, spp=128)
-    mi.util.write_bitmap("sunsky-testing/test.png", image)
-    mi.util.write_bitmap("sunsky-testing/test.exr", image)
+    mi.util.write_bitmap(f"../renders/{scene_name}.png", image)
+    mi.util.write_bitmap(f"../renders/{scene_name}.exr", image)
 
-render()
+render_scene("sky_rgb")

@@ -23,25 +23,30 @@ class SunskyEmitter(mi.Emitter):
         self.m_bsphere = mi.BoundingSphere3f(mi.Point3f(0), 1)
         self.m_surface_area = 4.0 * dr.pi
 
-        self.m_albedo = props.get("albedo", 0.5)
-        self.m_turb = props.get("turbidity", 6)
+        self.m_albedo = props.get("albedo", 0.15)
+        self.m_turb = props.get("turbidity", 3)
 
         sun_elevation = 0.5 * dr.pi * (2/100)
         self.m_up = props.get("to_world", mi.Transform4f(1)) @ mi.Vector3f(0, 0, 1)
-        self.m_sun_dir = mi.Vector3f(dr.cos(sun_elevation), 0, dr.sin(sun_elevation))
+        self.m_sun_dir = dr.normalize(props.get("sun_direction", mi.Vector3f(dr.cos(sun_elevation), 0, dr.sin(sun_elevation))))
+        sun_elevation = dr.pi/2 - dr.acos(dr.dot(self.m_sun_dir, self.m_up))
+
+
+        _ = props.get("sun_scale", 1.0)
+
 
         if mi.is_spectral:
-            dataset_name = props.get("dataset_name", "sunsky-testing/res/ssm_dataset_v2_spec")
+            dataset_name = props.get("dataset_name", "data/ssm_dataset_v2_spec")
 
             self.wavelengths = [320, 360, 400, 420, 460, 520, 560, 600, 640, 680, 720]
             self.wavelength_step = 40
 
         elif mi.is_rgb:
-            dataset_name = props.get("dataset_name", "sunsky-testing/res/ssm_dataset_v2_rgb")
+            dataset_name = props.get("dataset_name", "data/ssm_dataset_v2_rgb")
 
         _, database = mi.array_from_file(dataset_name + ".bin")
         _, database_rad = mi.array_from_file(dataset_name + "_rad.bin")
-        self.m_params = get_params(database, self.m_turb, self.m_albedo, sun_elevation)
+        self.m_params = get_params(database, self.m_turb, self.m_albedo, dr.pi/2 - dr.acos(dr.dot(self.m_sun_dir, self.m_up)))
         self.m_rad = get_params(database_rad, self.m_turb, self.m_albedo, sun_elevation)
 
         dr.eval(self.m_params, self.m_rad)
@@ -177,3 +182,5 @@ class SunskyEmitter(mi.Emitter):
 
     def is_environment(self):
         return True
+
+mi.register_emitter("sunsky", SunskyEmitter)
