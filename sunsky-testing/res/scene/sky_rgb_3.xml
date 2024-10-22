@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<scene version="0.6.0">
+    <integrator type="path">
+        <integer name="maxDepth" value="2"/>
+    </integrator>
+
+    <sensor type="spherical">
+        <sampler type="independent">
+            <integer name="sampleCount" value="16"/>
+        </sampler>
+
+        <film type="hdrfilm">
+            <integer name="width" value="1024"/>
+            <integer name="height" value="512"/>
+        </film>
+    </sensor>
+
+    <!-- Sunsky emitter to test -->
+    <emitter type="sunsky">
+        <vector name="sunDirection" x="-0.996917" y="0.0" z="0.0784591"/>
+        <string name="dataset_name" value="sunsky-testing/res/datasets/ssm_dataset_v2_rgb"/>
+    </emitter>
+
+</scene>

@@ -1,7 +1,7 @@
 import drjit as dr
 import mitsuba as mi
 
-from sunsky_data import get_params
+from .sunsky_data import get_params
 
 def get_class(name):
     name = name.split('.')
@@ -32,9 +32,6 @@ class SunskyEmitter(mi.Emitter):
         sun_elevation = dr.pi/2 - dr.acos(dr.dot(self.m_sun_dir, self.m_up))
 
 
-        _ = props.get("sun_scale", 1.0)
-
-
         if mi.is_spectral:
             dataset_name = props.get("dataset_name", "data/ssm_dataset_v2_spec")
 
@@ -46,7 +43,7 @@ class SunskyEmitter(mi.Emitter):
 
         _, database = mi.array_from_file(dataset_name + ".bin")
         _, database_rad = mi.array_from_file(dataset_name + "_rad.bin")
-        self.m_params = get_params(database, self.m_turb, self.m_albedo, dr.pi/2 - dr.acos(dr.dot(self.m_sun_dir, self.m_up)))
+        self.m_params = get_params(database, self.m_turb, self.m_albedo, sun_elevation)
         self.m_rad = get_params(database_rad, self.m_turb, self.m_albedo, sun_elevation)
 
         dr.eval(self.m_params, self.m_rad)
@@ -89,6 +86,8 @@ class SunskyEmitter(mi.Emitter):
             res[0] = self.render_channel(0, cos_theta, cos_gamma, active)
             res[1] = self.render_channel(1, cos_theta, cos_gamma, active)
             res[2] = self.render_channel(2, cos_theta, cos_gamma, active)
+
+            res *= mi.MI_CIE_D65_NORMALIZATION
 
         else:
             normalized_wavelengths = (si.wavelengths - self.wavelengths[0]) / self.wavelength_step
