@@ -23,7 +23,7 @@ class SunskyEmitter(mi.Emitter):
         self.m_bsphere = mi.BoundingSphere3f(mi.Point3f(0), 1)
         self.m_surface_area = 4.0 * dr.pi
 
-        self.m_albedo = props.get("albedo", 0.15)
+        self.m_albedo = mi.Float(props.get("albedo", 0.15))
         self.m_turb = props.get("turbidity", 3)
 
         sun_elevation = 0.5 * dr.pi * (2/100)

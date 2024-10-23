@@ -27,20 +27,18 @@ def bezier_interpolate(dataset: mi.Float, block_size: int, offset: mi.UInt32, x:
     """
      Interpolates data along a quintic Bézier curve
     :param dataset: Flat dataset
-    :param block_size: Size of the block (CTRL_PTS * NB_COLORS [* NB_PARAMS])
+    :param block_size: Size of the block (NB_COLORS [* NB_PARAMS])
     :param offset: Offset to the start of the block
     :param x: belongs to [0, 1], point to interpolate data at
     :return: The interpolated data in flat array of shape: (NB_COLORS [, NB_PARAMS])
     """
 
     coefs  = [1, 5, 10, 10, 5, 1]
+    indices = offset + dr.arange(mi.UInt32, block_size)
 
-    inner_block_size = block_size // 6
-    indices = offset + dr.arange(mi.UInt32, inner_block_size)
-
-    res = dr.zeros(mi.Float, inner_block_size)
+    res = dr.zeros(mi.Float, block_size)
     for i in range(6):
-        data = dr.gather(mi.Float, dataset, indices + i * inner_block_size)
+        data = dr.gather(mi.Float, dataset, indices + i * block_size)
         res += coefs[i] * (x ** i) * ((1 - x) ** (5-i)) * data
 
     return res
@@ -57,12 +55,12 @@ def get_params(dataset: mi.Float, t: mi.Int | mi.Float, a: mi.Int | mi.Float, et
     :return: Interpolated coefficients / mean radiance values
     """
     dr.assert_true(0 <= eta <= 0.5 * dr.pi, "Sun elevation is not between 0 and %f (pi/2): %f", (dr.pi/2, eta))
-    dr.assert_true(0 <= a <= 1, "Albedo (a) value is not between 0 and 1: %f", a)
+    dr.assert_true(dr.all((0 <= a) & (a <= 1)), "Albedo (a) value is not between 0 and 1: %f", a)
     dr.assert_true(1 <= t <= 10, "Turbidity value is not between 0 and 10: %f", t)
 
     t = dr.clip(t, 1, 10)
     a = dr.clip(a, 0, 1)
-    eta = dr.clip(eta, 0, 0.5 * dr.pi)
+    eta = dr.clip(eta, 0.0, 0.5 * dr.pi)
 
     x: mi.Float = dr.power(2 * dr.inv_pi * eta, 1/3)
 
@@ -73,10 +71,14 @@ def get_params(dataset: mi.Float, t: mi.Int | mi.Float, a: mi.Int | mi.Float, et
 
     t_block_size = len(dataset) // 10
     a_block_size = t_block_size // 2
+    ctrl_block_size = a_block_size // 6
 
-    res  = (1 - t_rem) * (1 - a) * bezier_interpolate(dataset, a_block_size, t_low  * t_block_size + 0 * a_block_size, x)
-    res += (1 - t_rem) * a       * bezier_interpolate(dataset, a_block_size, t_low  * t_block_size + 1 * a_block_size, x)
-    res += t_rem       * (1 - a) * bezier_interpolate(dataset, a_block_size, t_high * t_block_size + 0 * a_block_size, x)
-    res += t_rem       * a       * bezier_interpolate(dataset, a_block_size, t_high * t_block_size + 1 * a_block_size, x)
+    res_a_low = dr.lerp(bezier_interpolate(dataset, ctrl_block_size, t_low  * t_block_size + 0 * a_block_size, x),
+                        bezier_interpolate(dataset, ctrl_block_size, t_high  * t_block_size + 0 * a_block_size, x), t_rem)
+    res_a_high = dr.lerp(bezier_interpolate(dataset, ctrl_block_size, t_low  * t_block_size + 1 * a_block_size, x),
+                         bezier_interpolate(dataset, ctrl_block_size, t_high  * t_block_size + 1 * a_block_size, x), t_rem)
 
-    return res & ((1 <= t <= 10) & (0 <= a <= 1) & (0 <= eta <= 0.5 * dr.pi))
+    inner_block_size = (ctrl_block_size // (3 if dr.hint(mi.is_rgb, mode="scalar") else 11))
+
+    res = dr.lerp(res_a_low, res_a_high, dr.repeat(a, inner_block_size))
+    return res & ((1 <= t <= 10) & (0 <= eta <= 0.5 * dr.pi))

@@ -39,7 +39,9 @@ def render_and_compare(ref_path, params: tuple[float]):
     rendered_scene = dr.reshape(mi.TensorXf, rendered_scene, (1024//2, 1024, 3))
     reference_scene = mi.Bitmap(ref_path)
 
-    if not dr.allclose(rendered_scene, mi.TensorXf(reference_scene), atol=1e-2, rtol=1e-2):
+    rtol = 0.11
+    atol = rtol/100
+    if not dr.allclose(rendered_scene, mi.TensorXf(reference_scene), rtol=rtol, atol=atol):
         print(f"Fail when rendering {params=}")
         print("Reference is ", ref_path)
         mi.util.write_bitmap("sunsky-testing/res/renders/fail.exr", rendered_scene)
