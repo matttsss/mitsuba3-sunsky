@@ -33,13 +33,13 @@ class SunskyEmitter(mi.Emitter):
 
 
         if mi.is_spectral:
-            dataset_name = props.get("dataset_name", "data/ssm_dataset_v2_spec")
+            dataset_name = props.get("dataset_name", "sunsky-testing/res/datasets/ssm_dataset_v2_spec")
 
             self.wavelengths = [320, 360, 400, 420, 460, 520, 560, 600, 640, 680, 720]
             self.wavelength_step = 40
 
         elif mi.is_rgb:
-            dataset_name = props.get("dataset_name", "data/ssm_dataset_v2_rgb")
+            dataset_name = props.get("dataset_name", "sunsky-testing/res/datasets/ssm_dataset_v2_rgb")
 
         _, database = mi.array_from_file(dataset_name + ".bin")
         _, database_rad = mi.array_from_file(dataset_name + "_rad.bin")
@@ -87,7 +87,7 @@ class SunskyEmitter(mi.Emitter):
             res[1] = self.render_channel(1, cos_theta, cos_gamma, active)
             res[2] = self.render_channel(2, cos_theta, cos_gamma, active)
 
-            res *= mi.MI_CIE_D65_NORMALIZATION
+            res /= 106.856980
 
         else:
             normalized_wavelengths = (si.wavelengths - self.wavelengths[0]) / self.wavelength_step
