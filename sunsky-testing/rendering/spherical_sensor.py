@@ -33,7 +33,7 @@ class SphericalSensor(mi.Sensor):
         ray = mi.Ray3f(mi.Point3f(0.0), mi.Vector3f(cp*st, sp*st, ct), time)
 
         if dr.hint(mi.is_spectral, mode="scalar"):
-            ray.wavelengths = mi.Spectrum(mi.sample_shifted(sample1))
+            ray.wavelengths = mi.sample_shifted(sample1) * (mi.MI_CIE_MAX - mi.MI_CIE_MIN) + mi.MI_CIE_MIN
 
         return self.transform.transform_affine(ray), mi.Spectrum(1.0)
 

@@ -3,18 +3,6 @@ import mitsuba as mi
 
 from .sunsky_data import get_params
 
-def get_class(name):
-    name = name.split('.')
-    value = __import__(".".join(name[:-1]))
-    for item in name[1:]:
-        value = getattr(value, item)
-    return value
-
-def get_module(class_):
-    return get_class(class_.__module__)
-
-ArrayXf = get_module(mi.Float).ArrayXf
-
 class SunskyEmitter(mi.Emitter):
 
     def __init__(self, props):
@@ -24,6 +12,9 @@ class SunskyEmitter(mi.Emitter):
         self.m_surface_area = 4.0 * dr.pi
 
         self.m_albedo = mi.Float(props.get("albedo", 0.15))
+        if len(self.m_albedo) == 1:
+            self.m_albedo = dr.repeat(self.m_albedo, 3 if dr.hint(mi.is_rgb, mode="scalar") else 11)
+
         self.m_turb = props.get("turbidity", 3)
 
         sun_elevation = 0.5 * dr.pi * (2/100)
@@ -33,13 +24,12 @@ class SunskyEmitter(mi.Emitter):
 
 
         if mi.is_spectral:
-            dataset_name = props.get("dataset_name", "sunsky-testing/res/datasets/ssm_dataset_v2_spec")
-
+            dataset_name = "sunsky-testing/res/datasets/ssm_dataset_v2_spec"
             self.wavelengths = [320, 360, 400, 420, 460, 520, 560, 600, 640, 680, 720]
             self.wavelength_step = 40
 
         elif mi.is_rgb:
-            dataset_name = props.get("dataset_name", "sunsky-testing/res/datasets/ssm_dataset_v2_rgb")
+            dataset_name = "sunsky-testing/res/datasets/ssm_dataset_v2_rgb"
 
         _, database = mi.array_from_file(dataset_name + ".bin")
         _, database_rad = mi.array_from_file(dataset_name + "_rad.bin")
@@ -63,16 +53,16 @@ class SunskyEmitter(mi.Emitter):
 
 
     def render_channel(self, idx: mi.UInt32, cos_theta: mi.Float, cos_gamma: mi.Float, active: mi.Bool):
-        coefs = dr.gather(ArrayXf, self.m_params, idx, active, shape=(9, 1))
+        coefs = dr.gather(mi.ArrayXf, self.m_params, idx, active, shape=(9, 1))
 
-        gamma = dr.acos(cos_gamma)
+        gamma = dr.safe_acos(cos_gamma)
         cos_gamma_sqr = dr.square(cos_gamma)
 
         c1 = 1 + coefs[0] * dr.exp(coefs[1] / (cos_theta + 0.01))
         chi = (1 + cos_gamma_sqr) / dr.power(1 + dr.square(coefs[8]) - 2 * coefs[8] * cos_gamma, 1.5)
-        c2 = coefs[2] + coefs[3] * dr.exp(coefs[4] * gamma) + coefs[5] * cos_gamma_sqr + coefs[6] * chi + coefs[7] * dr.sqrt(cos_theta)
+        c2 = coefs[2] + coefs[3] * dr.exp(coefs[4] * gamma) + coefs[5] * cos_gamma_sqr + coefs[6] * chi + coefs[7] * dr.safe_sqrt(cos_theta)
 
-        return c1 * c2 * dr.gather(mi.Float, self.m_rad, idx, active) & (cos_theta >= 0)
+        return c1 * c2 * dr.gather(mi.Float, self.m_rad, idx, active)
 
     @dr.syntax
     def eval(self, si, active=True):

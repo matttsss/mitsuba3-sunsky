@@ -16,7 +16,6 @@
     <!-- Sunsky emitter to test -->
     <emitter type="sunsky">
         <vector name="sunDirection" x="-0.996917" y="0.0" z="0.0784591"/>
-        <string name="dataset_name" value="sunsky-testing/res/datasets/ssm_dataset_v2_rgb"/>
     </emitter>
 
 </scene>

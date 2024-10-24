@@ -27,9 +27,6 @@
         </bsdf>
     </shape>
 
-    <emitter type="sunsky" id="env">
-        <string name="dataset_name" value="sunsky-testing/res/datasets/ssm_dataset_v2_rgb"/>
-    </emitter>
-
+    <emitter type="sunsky" id="env"/>
 
 </scene>
