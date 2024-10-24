@@ -284,6 +284,35 @@ NAMESPACE_BEGIN(mitsuba)
         return std::pair<std::vector<size_t>, FloatStorage>(shape, data_v);
     }
 
+    template<typename Float>
+    void array_to_file(const std::string &path, const DynamicBuffer<Float>& data, const std::vector<size_t>& shape = {}) {
+        std::vector<size_t> _shape = shape.empty() ? std::vector<size_t>{data.size()} : shape;
+        if (_shape.empty())
+            _shape.push_back(data.size());
+
+        FileStream file(path, FileStream::EMode::ETruncReadWrite);
+
+        // =============== Write headers ===============
+        // Write headers
+        file.write("SKY", 3);
+        file.write((uint32_t) 0);
+
+        // =============== Write dimensions ===============
+        file.write((size_t) _shape.size());
+
+        for (size_t dim_length : _shape) {
+            file.write(dim_length);
+
+            if (!dim_length)
+                Throw("Got dimension with 0 elements");
+        }
+
+        // ==================== Write data ====================
+        file.write_array(data.data(), data.size());
+
+        file.close();
+    }
+
 
     template<typename Float>
     auto tensor_from_file(const std::string &path) {

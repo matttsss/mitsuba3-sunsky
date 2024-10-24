@@ -11,30 +11,60 @@ class SunskyEmitter(mi.Emitter):
         self.m_bsphere = mi.BoundingSphere3f(mi.Point3f(0), 1)
         self.m_surface_area = 4.0 * dr.pi
 
-        self.m_albedo = mi.Float(props.get("albedo", 0.15))
-        if len(self.m_albedo) == 1:
-            self.m_albedo = dr.repeat(self.m_albedo, 3 if dr.hint(mi.is_rgb, mode="scalar") else 11)
+        # Sort variant specific variables
+        if dr.hint(mi.is_spectral, mode="scalar"):
+            nb_channels = 11
+            dataset_name = "res/datasets/ssm_dataset_v2_spec"
+            self.wavelengths = [320, 360, 400, 420, 460, 520, 560, 600, 640, 680, 720]
+            self.wavelength_step = 40
 
-        self.m_turb = props.get("turbidity", 3)
+        elif dr.hint(mi.is_rgb, mode="scalar"):
+            nb_channels = 3
+            dataset_name = "res/datasets/ssm_dataset_v2_rgb"
 
+        # Get albedo as a Float
+        albedo_t = props.get("albedo", 0.15)
+        if isinstance(albedo_t, float):
+            albedo = mi.Float([albedo_t] * nb_channels)
+
+
+        elif isinstance(albedo_t, mi.Texture):
+            si = dr.zeros(mi.SurfaceInteraction3f)
+
+            if dr.hint(mi.is_spectral, mode="scalar"):
+                albedo = [0.0] * nb_channels
+                normalization = 0.0
+
+                for i in range(nb_channels):
+                    si.wavelengths = mi.Spectrum(self.wavelengths[i])
+                    res = albedo_t.eval(si)[0]
+
+                    normalization += res
+                    albedo[i] = res
+
+                albedo = mi.Float(dr.ravel(albedo)) / normalization
+
+            elif dr.hint(mi.is_rgb, mode="scalar"):
+                albedo = mi.Float(dr.ravel(albedo_t.eval(si)))
+
+
+        else:
+            raise RuntimeError("Invalid albedo type")
+
+
+        turb = props.get("turbidity", 3)
+
+        # Get sun direction / elevation
         sun_elevation = 0.5 * dr.pi * (2/100)
         self.m_up = props.get("to_world", mi.Transform4f(1)) @ mi.Vector3f(0, 0, 1)
         self.m_sun_dir = dr.normalize(props.get("sun_direction", mi.Vector3f(dr.cos(sun_elevation), 0, dr.sin(sun_elevation))))
         sun_elevation = dr.pi/2 - dr.acos(dr.dot(self.m_sun_dir, self.m_up))
 
-
-        if mi.is_spectral:
-            dataset_name = "sunsky-testing/res/datasets/ssm_dataset_v2_spec"
-            self.wavelengths = [320, 360, 400, 420, 460, 520, 560, 600, 640, 680, 720]
-            self.wavelength_step = 40
-
-        elif mi.is_rgb:
-            dataset_name = "sunsky-testing/res/datasets/ssm_dataset_v2_rgb"
-
+        # Get parameters
         _, database = mi.array_from_file(dataset_name + ".bin")
         _, database_rad = mi.array_from_file(dataset_name + "_rad.bin")
-        self.m_params = get_params(database, self.m_turb, self.m_albedo, sun_elevation)
-        self.m_rad = get_params(database_rad, self.m_turb, self.m_albedo, sun_elevation)
+        self.m_params = get_params(database, turb, albedo, sun_elevation)
+        self.m_rad = get_params(database_rad, turb, albedo, sun_elevation)
 
         dr.eval(self.m_params, self.m_rad)
 
