@@ -5,10 +5,10 @@ import drjit as dr
 import mitsuba as mi
 import matplotlib.pyplot as plt
 
-mi.set_variant("llvm_rgb")
+mi.set_variant("cuda_rgb")
 
+from rendering.sunsky_plugin import SunskyEmitter
 from helpers import get_north_hemisphere_rays
-from rendering.sunsky_data import get_params, get_rad, get_sun
 
 def test_mean_radiance_data():
     dr.print("Testing mean radiance values")
@@ -102,42 +102,32 @@ def test_radiance_data():
     assert dr.allclose(expected, dr.unravel(mi.Float, mi.Float(dataset[0, 5, ::, 1]), "C"))
 
 
-def test_render(database, database_rad, render_shape, t, a, eta):
+def test_render(render_shape, t, a, eta, wavelengths=None):
+    phi_sun = 3 * dr.pi/2
+    sp_sun, cp_sun = dr.sincos(phi_sun)
+    st, ct = dr.sincos(dr.pi/2 - eta)
+
     # Compute coefficients
-    params = get_params(database, t, a, eta)
-    mean_radiance = get_params(database_rad, t, a, eta)
+    sky = mi.load_dict({
+        "type": "sunsky",
+        "sun_direction": [cp_sun * st, sp_sun * st, ct],
+        "turbidity": t,
+        "albedo": a
+    })
 
-    # Get rays
-    view_dir, thetas = get_north_hemisphere_rays(render_shape, True)
-    sun_dir = mi.Vector3f(dr.cos(eta), 0, dr.sin(eta))
+    # Get surface interactions
+    si = dr.zeros(mi.SurfaceInteraction3f)
+    si.wi = -get_north_hemisphere_rays(render_shape)
+    if wavelengths is not None:
+        si.wavelengths = wavelengths
 
-    gammas = dr.safe_acos(dr.dot(view_dir, sun_dir))
-
-    nb_channels = len(mean_radiance)
-    res = dr.zeros(mi.TensorXf, (render_shape[1], render_shape[0], nb_channels))
-
-    for i in range(nb_channels):
-        coefs = dr.gather(mi.Float, params, i*9 + dr.arange(mi.UInt32, 9))
-        res[::, ::, i] = get_rad(coefs, thetas, gammas) * mean_radiance[i]
-
-    return res
-
-def render_sun():
-    resolution = (1024*4, 1024)
-    view_dir = get_north_hemisphere_rays(resolution)
-
-    eta = 0.5 * dr.pi * 2/100
-
-    sun_dir = mi.Vector3f(dr.cos(eta), 0, dr.sin(eta))
-
-    res = dr.reshape(mi.TensorXf, get_sun(sun_dir, view_dir, dr.pi/5, 0.1, 1e-2), resolution)
-    mi.util.write_bitmap(f"sunsky-testing/res/renders/sun_test.exr", res)
+    # Evaluate the sky model and reshape to image
+    return dr.reshape(mi.TensorXf, sky.eval(si), (render_shape[1], render_shape[0], 3))
 
 
 def render_suite():
-    _, dataset_rad = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v2_rgb_rad.bin")
-    _, dataset = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v2_rgb.bin")
-
+    mi.set_variant("cuda_rgb")
+    mi.register_emitter("sunsky", SunskyEmitter)
     resolution = (256*4, 256)
 
     r70 = dr.pi/2 * (70/100)
@@ -148,23 +138,23 @@ def render_suite():
 
     for t in range(1, 11):
         eta, a = r5, 0.5
-        res = test_render(dataset, dataset_rad, resolution, t, a, r5/10)
+        res = test_render(resolution, t, a, r5/10)
         mi.util.write_bitmap(f"sunsky-testing/res/renders/sm_t{t}_a{a}_eta{int(eta * 2 * dr.inv_pi * 100)}.exr", res)
 
 def test_plot_spectral():
+    mi.set_variant("llvm_spectral")
+    mi.register_emitter("sunsky", SunskyEmitter)
+
     wavelengths = [320, 360, 400, 440, 480, 520, 560, 600, 640, 680, 720]
-    _, dataset_rad = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_spec_rad.bin")
-    _, dataset = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_spec.bin")
-
     eta, t, a = dr.pi/2 * (30/100), 6, 0.5
-
-    res = test_render(dataset, dataset_rad, (256*3, 256), t, a, eta)
 
     fig, axes = plt.subplots(3, 4)
 
     for i in range(11):
+        res = test_render((256*3, 256), t, a, eta, [wavelengths[i]] * 4)
+
         subplot = axes[i//4][i%4]
-        subplot.imshow(res[::, ::, i], cmap="hot")
+        subplot.imshow(res[::, ::, 0], cmap="hot")
         subplot.axis('off')
         subplot.set_title(f"{wavelengths[i]}$\\lambda$")
     fig.delaxes(axes[2][3])
@@ -174,9 +164,9 @@ def test_plot_spectral():
 
 
 if __name__ == "__main__":
-    mi.write_sky_model_data_v2("sunsky-testing/res/datasets/ssm_dataset")
+    #mi.write_sky_model_data_v2("sunsky-testing/res/datasets/ssm_dataset")
 
     test_mean_radiance_data()
     test_radiance_data()
-    test_plot_spectral()
+    #test_plot_spectral() FIXME solve std::bad_cast error
     render_suite()

@@ -14,13 +14,13 @@ class SunskyEmitter(mi.Emitter):
         # Sort variant specific variables
         if dr.hint(mi.is_spectral, mode="scalar"):
             nb_channels = 11
-            dataset_name = "res/datasets/ssm_dataset_v2_spec"
+            dataset_name = "sunsky-testing/res/datasets/ssm_dataset_v2_spec"
             self.wavelengths = [320, 360, 400, 420, 460, 520, 560, 600, 640, 680, 720]
             self.wavelength_step = 40
 
         elif dr.hint(mi.is_rgb, mode="scalar"):
             nb_channels = 3
-            dataset_name = "res/datasets/ssm_dataset_v2_rgb"
+            dataset_name = "sunsky-testing/res/datasets/ssm_dataset_v2_rgb"
 
         # Get albedo as a Float
         albedo_t = props.get("albedo", 0.15)
