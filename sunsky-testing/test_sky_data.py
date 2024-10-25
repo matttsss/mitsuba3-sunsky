@@ -9,11 +9,60 @@ mi.set_variant("cuda_rgb")
 
 from rendering.sunsky_plugin import SunskyEmitter
 from helpers import get_north_hemisphere_rays
+from rendering.sunsky_data import get_tgmm_table, tgmm_pdf
+
+
+def test_gmm_values():
+    dr.print("Testing GGM values")
+
+    _, tgmm_tables = mi.array_from_file_f("sunsky-testing/res/datasets/tgmm_tables.bin")
+
+    # Test for T=2, eta = 2°, 2nd gaussian weights
+    index = 0 * (30 * 5 * 5) + 0 * (5 * 5) + 1 * 5 + dr.arange(mi.UInt32, 5)
+    expected = mi.Float(2.610391446, 0.463659442, 6, 0.444768602, 0.463477043)
+    assert dr.allclose(expected, dr.gather(mi.Float, tgmm_tables, index)), "Incorrect values for GGM (T=2, eta=2°, 2nd gaussian weights)"
+
+    # Test for T=9, eta = 86°, 4th gaussian weights
+    index = 7 * (30 * 5 * 5) + 28 * (5 * 5) + 3 * 5 + dr.arange(mi.UInt32, 5)
+    expected = mi.Float(0.605992344, 0.050513378, 1.991059441, 0.256612905, 0.153080459)
+    assert dr.allclose(expected, dr.gather(mi.Float, tgmm_tables, index)), "Incorrect values for GGM (T=9, eta=86°, 4nd gaussian weights)"
+
+
+def plot_pdf():
+    t, eta = 7, dr.deg2rad(73)
+    render_shape = (1024, 1024//4)
+
+    _, dataset_tgmm = mi.array_from_file_f("sunsky-testing/res/datasets/tgmm_tables.bin")
+    tgmm_table = get_tgmm_table(dataset_tgmm, t, eta)
+
+    phis, thetas = dr.meshgrid(
+        dr.linspace(mi.Float, 0, dr.two_pi, render_shape[0]),
+        dr.linspace(mi.Float, dr.pi/2, 0, render_shape[1]))
+
+    pdf = tgmm_pdf(tgmm_table, thetas, phis) # & (thetas > 0.15)
+
+    # Check integral over domain
+    pdf_integral = dr.sum(pdf) * (dr.two_pi / render_shape[0]) * ((0.5*dr.pi) / render_shape[1])
+    dr.print(f"PDF integral: {pdf_integral}")
+    #assert dr.abs(pdf_integral - 1) < 0.01, f"PDF does not integrate to 1: {pdf_integral}"
+
+    visual_pdf = dr.reshape(mi.TensorXf, pdf, render_shape[::-1])
+
+    # render sky
+    render = test_render(render_shape, t, 0.5, eta)
+
+    fig, axes = plt.subplots(ncols=2)
+    axes[0].imshow(render)
+    axes[0].axis('off')
+    axes[1].imshow(visual_pdf, cmap="gray")
+    axes[1].axis('off')
+    plt.show()
+
 
 def test_mean_radiance_data():
     dr.print("Testing mean radiance values")
 
-    _, dataset_rad = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_spec_rad.bin")
+    _, dataset_rad = mi.array_from_file_d("sunsky-testing/res/datasets/ssm_dataset_v1_spec_rad.bin")
 
     # Control points for mean radiance at a = 0, t = 2, lbda = 0
     index = 0 * (10 * 6 * 11) + 1 * (6 * 11) + dr.arange(mi.UInt32, 6) * 11 + 0
@@ -26,7 +75,7 @@ def test_mean_radiance_data():
     assert dr.allclose(expected, dr.gather(mi.Float, dataset_rad, index)), "Incorrect values for mean radiance (a=1, t=6, lbda=5)"
 
     # Test RGB dataset
-    _, dataset = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_rgb_rad.bin")
+    _, dataset = mi.array_from_file_d("sunsky-testing/res/datasets/ssm_dataset_v1_rgb_rad.bin")
 
     # albedo 0, turbidity 3, G
     index = 0 * (10 * 6 * 3) + 2 * (6 * 3) + dr.arange(mi.UInt32, 6) * 3 + 1
@@ -42,7 +91,7 @@ def test_mean_radiance_data():
 def test_radiance_data():
     dr.print("Testing radiance values")
 
-    shape, dataset = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_spec.bin")
+    shape, dataset = mi.array_from_file_d("sunsky-testing/res/datasets/ssm_dataset_v1_spec.bin")
     dataset = mi.TensorXf(dataset, tuple(shape))
 
     # Control points for radiance at a = 0, t = 2, lbda = 0
@@ -72,7 +121,7 @@ def test_radiance_data():
     assert dr.allclose(expected, dr.unravel(mi.Float, mi.Float(dataset[1, 5, ::, 5]), "C")), "Incorrect values for radiance (a=1, t=6, lbda=5)"
 
     # Test RGB dataset
-    shape, dataset = mi.array_from_file("sunsky-testing/res/datasets/ssm_dataset_v1_rgb.bin")
+    shape, dataset = mi.array_from_file_d("sunsky-testing/res/datasets/ssm_dataset_v1_rgb.bin")
     dataset = mi.TensorXf(dataset, tuple(shape))
 
     # Control points for radiance at a = 1, t = 8, R
@@ -126,8 +175,6 @@ def test_render(render_shape, t, a, eta, wavelengths=None):
 
 
 def render_suite():
-    mi.set_variant("cuda_rgb")
-    mi.register_emitter("sunsky", SunskyEmitter)
     resolution = (256*4, 256)
 
     r70 = dr.pi/2 * (70/100)
@@ -142,8 +189,6 @@ def render_suite():
         mi.util.write_bitmap(f"sunsky-testing/res/renders/sm_t{t}_a{a}_eta{int(eta * 2 * dr.inv_pi * 100)}.exr", res)
 
 def test_plot_spectral():
-    mi.set_variant("llvm_spectral")
-    mi.register_emitter("sunsky", SunskyEmitter)
 
     wavelengths = [320, 360, 400, 440, 480, 520, 560, 600, 640, 680, 720]
     eta, t, a = dr.pi/2 * (30/100), 6, 0.5
@@ -166,7 +211,10 @@ def test_plot_spectral():
 if __name__ == "__main__":
     #mi.write_sky_model_data_v2("sunsky-testing/res/datasets/ssm_dataset")
 
+    test_gmm_values()
+    plot_pdf()
+
     test_mean_radiance_data()
     test_radiance_data()
     #test_plot_spectral() FIXME solve std::bad_cast error
-    render_suite()
+    #render_suite()

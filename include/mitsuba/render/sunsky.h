@@ -238,7 +238,7 @@ NAMESPACE_BEGIN(mitsuba)
     }
 
     template<typename Float>
-    auto array_from_file(const std::string &path) {
+    auto array_from_file_d(const std::string &path) {
         using FloatStorage  = DynamicBuffer<Float>;
         using DoubleStorage = dr::float64_array_t<FloatStorage>;
 
@@ -277,6 +277,51 @@ NAMESPACE_BEGIN(mitsuba)
 
         DoubleStorage data_d = dr::load<DoubleStorage>(buffer, nb_elements);
         FloatStorage data_v = FloatStorage(data_d);
+
+        file.close();
+        free(buffer);
+
+        return std::pair<std::vector<size_t>, FloatStorage>(shape, data_v);
+    }
+
+    template<typename Float>
+    auto array_from_file_f(const std::string &path) {
+        using FloatStorage  = DynamicBuffer<Float>;
+
+        FileStream file(path, FileStream::EMode::ERead);
+
+        // =============== Read headers ===============
+        char text_buff[5] = "";
+        file.read(text_buff, 3);
+        if (strcmp(text_buff, "SKY"))
+            Throw("OUPSSS wrong file");
+
+        // Read version
+        uint32_t version;
+        file.read(version);
+
+        // =============== Read tensor dimensions ===============
+        size_t nb_dims = 0;
+        file.read(nb_dims);
+
+        size_t nb_elements = 1;
+        std::vector<size_t> shape(nb_dims);
+        for (size_t dim = 0; dim < nb_dims; ++dim) {
+            file.read(shape[dim]);
+
+            if (!shape[dim])
+                Throw("Got dimension with 0 elements");
+
+            nb_elements *= shape[dim];
+        }
+
+        // ==================== Read data ====================
+        float* buffer = static_cast<float *>(
+            calloc(nb_elements, sizeof(float)));
+
+        file.read_array(buffer, nb_elements);
+
+        FloatStorage data_v = dr::load<FloatStorage>(buffer, nb_elements);
 
         file.close();
         free(buffer);

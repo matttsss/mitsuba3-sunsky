@@ -61,8 +61,8 @@ class SunskyEmitter(mi.Emitter):
         sun_elevation = dr.pi/2 - dr.acos(dr.dot(self.m_sun_dir, self.m_up))
 
         # Get parameters
-        _, database = mi.array_from_file(dataset_name + ".bin")
-        _, database_rad = mi.array_from_file(dataset_name + "_rad.bin")
+        _, database = mi.array_from_file_d(dataset_name + ".bin")
+        _, database_rad = mi.array_from_file_d(dataset_name + "_rad.bin")
         self.m_params = get_params(database, turb, albedo, sun_elevation)
         self.m_rad = get_params(database_rad, turb, albedo, sun_elevation)
 
