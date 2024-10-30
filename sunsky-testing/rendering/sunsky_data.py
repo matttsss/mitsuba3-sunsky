@@ -121,7 +121,7 @@ def gaussian_cdf(x, mu, sigma):
     return 0.5 * (1 + dr.erf(dr.inv_sqrt_two * (x - mu) / sigma))
 
 def truncated_gaussian_quantile(sample, mu, sigma, a, b):
-    temp = dr.lerp(gaussian_cdf(b, mu, sigma), gaussian_cdf(a, mu, sigma), sample) # TODO check if it's not just "sample * (phi(b) - phi(a))"
+    temp = dr.lerp(gaussian_cdf(a, mu, sigma), gaussian_cdf(b, mu, sigma), sample)
     return dr.sqrt_two * sigma * dr.erfinv(2 * temp - 1) + mu
 
 def tgmm_pdf(tgmm_table: mi.Float, theta: mi.Float, phi: mi.Float, active=True) -> mi.Float:
@@ -133,41 +133,60 @@ def tgmm_pdf(tgmm_table: mi.Float, theta: mi.Float, phi: mi.Float, active=True) 
     :return: PDF value
     """
 
+    x = mi.Point2f(phi, theta)
+    a = mi.Point2f(0.0)
+    b = mi.Point2f(dr.two_pi, dr.pi/2)
+
     pdf = mi.Float(0.0)
     for i in range(5):
         coefs = dr.gather(mi.ArrayXf, tgmm_table, i, active, shape=(5, 1))
-        dr.print(coefs)
 
-        mu_p, mu_t, sigma_p, sigma_t, weight = coefs[0], coefs[1], coefs[2], coefs[3], coefs[4]
+        mu = mi.Point2f(coefs[0], coefs[1])
+        sigma = mi.Point2f(coefs[2], coefs[3])
 
-        volume = ((gaussian_cdf(0.5 * dr.pi, mu_t, sigma_t) - gaussian_cdf(0, mu_t, sigma_t)) * # Theta Area
-                  (gaussian_cdf(dr.two_pi, mu_p, sigma_p) - gaussian_cdf(0, mu_p, sigma_p)))    # Phi Area
+        cdf_a = gaussian_cdf(a, mu, sigma)
+        cdf_b = gaussian_cdf(b, mu, sigma)
 
-        centered_pt = mi.Point2f((theta - mu_t) / sigma_t, (phi - mu_p) / sigma_p)
-        unbounded_pdf = mi.warp.square_to_std_normal_pdf(centered_pt) / (sigma_t * sigma_p)
+        volume = (cdf_b[0] - cdf_a[0]) * (cdf_b[1] - cdf_a[1]) #    * (sigma[0] * sigma[1])
 
-        pdf += weight * unbounded_pdf / volume
+        unbounded_pdf = mi.warp.square_to_std_normal_pdf((x - mu) / sigma)
 
-    return pdf & (theta > 0)
+        pdf += coefs[4] * unbounded_pdf / volume
+
+    return pdf & (theta >= 0) & (theta <= dr.pi / 2) & (phi >= 0) & (phi <= dr.two_pi)
 
 
-def sample_tgmm(tgmm_table: mi.Float, sample: mi.Point2f, active=True) -> mi.Point2f:
+def sample_tgmm(tgmm_table: mi.Float, sample: mi.Point2f, active=True) -> mi.Vector3f:
     """
     Sample the TGMM model at the given point
-    :param tgmm_table: TGMM table to sample from
+    :param tgmm_table: TGMM table containing the gaussian parameters
     :param sample: 2D sample point
     :return: Sampled point
     """
 
-    dist = mi.DiscreteDistribution(dr.gather(mi.Float, tgmm_table, 6 * dr.arange(mi.UInt32, 5) + 5, active))
+    dist = mi.DiscreteDistribution(dr.gather(mi.Float, tgmm_table, 5 * dr.arange(mi.UInt32, 5) + 4, active))
     dist.update()
 
-    gaussian_idx, sample[0] = dist.sample_reuse(sample[0])
+    gaussian_idx, sample[0] = dist.sample_reuse(sample[0], active)
 
-    gaussian = dr.gather(mi.ArrayXf, tgmm_table, gaussian_idx, active, shape=(6, 1))
-    mu_p, mu_t, sigma_p, sigma_t, weight = gaussian[0], gaussian[1], gaussian[2], gaussian[3], gaussian[4]
+    gaussian = dr.gather(mi.ArrayXf, tgmm_table, gaussian_idx, active, shape=(5, 1))
 
-    phi = truncated_gaussian_quantile(sample[0], mu_p, sigma_p, 0, dr.two_pi)
-    theta = truncated_gaussian_quantile(sample[1], mu_t, sigma_t, 0, 0.5 * dr.pi)
+    # (mu_p, mu_t)
+    mu = mi.Point2f(gaussian[0], gaussian[1])
 
-    return mi.Point2f(phi, theta)
+    # (sigma_p, sigma_t)
+    sigma = mi.Point2f(gaussian[2], gaussian[3])
+
+    a = mi.Point2f(0.0)
+    b = mi.Point2f(dr.two_pi, dr.pi/2)
+
+    cdf_a = gaussian_cdf(a, mu, sigma)
+    cdf_b = gaussian_cdf(b, mu, sigma)
+
+    sample = cdf_a + sample * (cdf_b - cdf_a)
+    res = dr.sqrt_two * dr.erfinv(2 * sample - 1) * sigma + mu
+
+    sp, cp = dr.sincos(res[0])
+    st, ct = dr.sincos(dr.pi/2 - res[1])
+
+    return mi.Vector3f(cp * st, sp * st, ct)

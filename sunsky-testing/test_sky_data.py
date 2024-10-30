@@ -9,11 +9,11 @@ mi.set_variant("cuda_rgb")
 
 from rendering.sunsky_plugin import SunskyEmitter
 from helpers import get_north_hemisphere_rays
-from rendering.sunsky_data import get_tgmm_table, tgmm_pdf
+from rendering.sunsky_data import get_tgmm_table, tgmm_pdf, sample_tgmm
 
 
 def test_gmm_values():
-    dr.print("Testing GGM values")
+    dr.print("Testing GMM values")
 
     _, tgmm_tables = mi.array_from_file_f("sunsky-testing/res/datasets/tgmm_tables.bin")
 
@@ -27,6 +27,72 @@ def test_gmm_values():
     expected = mi.Float(0.605992344, 0.050513378, 1.991059441, 0.256612905, 0.153080459)
     assert dr.allclose(expected, dr.gather(mi.Float, tgmm_tables, index)), "Incorrect values for GGM (T=9, eta=86°, 4nd gaussian weights)"
 
+    # Test for T=6, eta = 41°, 3rd gaussian weights
+    index = 4 * (30 * 5 * 5) + 13 * (5 * 5) + 2 * 5 + dr.arange(mi.UInt32, 5)
+    expected = mi.Float(1.565581977, 0.627374917, 0.258039383, 0.201905279, 0.087714186)
+    assert dr.allclose(expected, dr.gather(mi.Float, tgmm_tables, index)), "Incorrect values for GGM (T=6, eta=41°, 3rd gaussian weights)"
+
+    # Test for T=7, eta = 50°, 5th gaussian weights
+    index = 5 * (30 * 5 * 5) + 16 * (5 * 5) + 4 * 5 + dr.arange(mi.UInt32, 5)
+    expected = mi.Float(1.573958981, 0.171513533, 0.53386282, 0.474166945, 0.154709808)
+    assert dr.allclose(expected, dr.gather(mi.Float, tgmm_tables, index)), "Incorrect values for GGM (T=7, eta=50°, 5th gaussian weights)"
+
+def test_get_tgmm_table():
+    dr.print("Testing get GMM tables")
+
+    _, tgmm_tables = mi.array_from_file_f("sunsky-testing/res/datasets/tgmm_tables.bin")
+
+
+    # Test for T=2, eta = 2°, 2nd gaussian weights
+    table = get_tgmm_table(tgmm_tables, 2, dr.deg2rad(2))
+
+    expected_weights = mi.Float(0.054385298, 0.463477043, 0.057274885, 0.110654598, 0.314208176)
+    weights = dr.gather(mi.Float, table, 5 * dr.arange(mi.UInt32, 5) + 4)
+    assert dr.allclose(expected_weights, weights), "Incorrect values for GGM weights (T=2, eta=2°, 2nd gaussian weights)"
+
+    expected = mi.Float(2.610391446, 0.463659442, 6, 0.444768602, 0.463477043)
+    assert dr.allclose(expected, dr.gather(mi.Float, table, 1 * 5 + dr.arange(mi.UInt32, 5))), "Incorrect values for GGM (T=2, eta=2°, 2nd gaussian weights)"
+
+    # Test for T=9, eta = 86°, 4th gaussian weights
+    table = get_tgmm_table(tgmm_tables, 9, dr.deg2rad(86))
+
+    expected_weights = mi.Float(0.160952343, 0.31412632, 0.158529337, 0.153080459, 0.21331154)
+    weights = dr.gather(mi.Float, table, 5 * dr.arange(mi.UInt32, 5) + 4)
+    assert dr.allclose(expected_weights, weights), "Incorrect values for GGM weights (T=9, eta=86°, 4nd gaussian weights)"
+
+    expected = mi.Float(0.605992344, 0.050513378, 1.991059441, 0.256612905, 0.153080459)
+    assert dr.allclose(expected, dr.gather(mi.Float, table, 3 * 5 + dr.arange(mi.UInt32, 5))), "Incorrect values for GGM (T=9, eta=86°, 4nd gaussian weights)"
+
+    # Test for T=6, eta = 41°, 3rd gaussian weights
+    table = get_tgmm_table(tgmm_tables, 6, dr.deg2rad(41))
+    expected = mi.Float(1.565581977, 0.627374917, 0.258039383, 0.201905279, 0.087714186)
+    assert dr.allclose(expected, dr.gather(mi.Float, table, 2 * 5 + dr.arange(mi.UInt32, 5))), "Incorrect values for GGM (T=6, eta=41°, 3rd gaussian weights)"
+
+    # Test for T=7, eta = 50°, 5th gaussian weights
+    table = get_tgmm_table(tgmm_tables, 7, dr.deg2rad(50))
+    expected = mi.Float(1.573958981, 0.171513533, 0.53386282, 0.474166945, 0.154709808)
+    assert dr.allclose(expected, dr.gather(mi.Float, table, 4 * 5 + dr.arange(mi.UInt32, 5))), "Incorrect values for GGM (T=7, eta=50°, 5th gaussian weights)"
+
+
+def test_chi2_tgmm():
+    _, tgmm_table = mi.array_from_file_f("sunsky-testing/res/datasets/tgmm_tables.bin")
+    tgmm_table = get_tgmm_table(tgmm_table, 7, dr.deg2rad(73))
+
+    def pdf_adapter(p):
+        f = mi.Frame3f(mi.Vector3f(1, 0, 0))
+        theta = dr.acos(f.cos_theta(p))
+        phi = dr.acos(f.cos_phi(p))
+        return tgmm_pdf(tgmm_table, theta, phi)
+
+    test = mi.chi2.ChiSquareTest(
+        domain=mi.chi2.SphericalDomain(),
+        pdf_func= pdf_adapter,
+        sample_func= lambda sample : sample_tgmm(tgmm_table, sample),
+        #sample_func=mi.warp.square_to_cosine_hemisphere,
+        sample_dim=2
+    )
+
+    assert test.run()
 
 def plot_pdf():
     t, eta = 7, dr.deg2rad(73)
@@ -212,7 +278,9 @@ if __name__ == "__main__":
     #mi.write_sky_model_data_v2("sunsky-testing/res/datasets/ssm_dataset")
 
     test_gmm_values()
+    test_get_tgmm_table()
     plot_pdf()
+    test_chi2_tgmm()
 
     test_mean_radiance_data()
     test_radiance_data()
