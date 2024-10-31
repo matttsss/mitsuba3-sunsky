@@ -9,7 +9,7 @@ mi.set_variant("cuda_rgb")
 
 from rendering.sunsky_plugin import SunskyEmitter
 from helpers import get_north_hemisphere_rays
-from rendering.sunsky_data import get_tgmm_table, tgmm_pdf, sample_tgmm
+from rendering.sunsky_data import get_tgmm_table, GAUSSIAN_WEIGHT_IDX
 
 
 def test_gmm_values():
@@ -47,7 +47,7 @@ def test_get_tgmm_table():
     table = get_tgmm_table(tgmm_tables, 2, dr.deg2rad(2))
 
     expected_weights = mi.Float(0.054385298, 0.463477043, 0.057274885, 0.110654598, 0.314208176)
-    weights = dr.gather(mi.Float, table, 5 * dr.arange(mi.UInt32, 5) + 4)
+    weights = dr.gather(mi.Float, table, GAUSSIAN_WEIGHT_IDX)
     assert dr.allclose(expected_weights, weights), "Incorrect values for GGM weights (T=2, eta=2°, 2nd gaussian weights)"
 
     expected = mi.Float(2.610391446, 0.463659442, 6, 0.444768602, 0.463477043)
@@ -57,7 +57,7 @@ def test_get_tgmm_table():
     table = get_tgmm_table(tgmm_tables, 9, dr.deg2rad(86))
 
     expected_weights = mi.Float(0.160952343, 0.31412632, 0.158529337, 0.153080459, 0.21331154)
-    weights = dr.gather(mi.Float, table, 5 * dr.arange(mi.UInt32, 5) + 4)
+    weights = dr.gather(mi.Float, table, GAUSSIAN_WEIGHT_IDX)
     assert dr.allclose(expected_weights, weights), "Incorrect values for GGM weights (T=9, eta=86°, 4nd gaussian weights)"
 
     expected = mi.Float(0.605992344, 0.050513378, 1.991059441, 0.256612905, 0.153080459)
@@ -73,54 +73,68 @@ def test_get_tgmm_table():
     expected = mi.Float(1.573958981, 0.171513533, 0.53386282, 0.474166945, 0.154709808)
     assert dr.allclose(expected, dr.gather(mi.Float, table, 4 * 5 + dr.arange(mi.UInt32, 5))), "Incorrect values for GGM (T=7, eta=50°, 5th gaussian weights)"
 
+def test_chi2_emitter():
+    t, a = 3, 0.5
+    eta = dr.deg2rad(55)
+    phi_sun = dr.pi/2
 
-def test_chi2_tgmm():
-    _, tgmm_table = mi.array_from_file_f("sunsky-testing/res/datasets/tgmm_tables.bin")
-    tgmm_table = get_tgmm_table(tgmm_table, 7, dr.deg2rad(73))
+    sp_sun, cp_sun = dr.sincos(phi_sun)
+    st, ct = dr.sincos(dr.pi/2 - eta)
 
-    def pdf_adapter(p):
-        f = mi.Frame3f(mi.Vector3f(1, 0, 0))
-        theta = dr.acos(f.cos_theta(p))
-        phi = dr.acos(f.cos_phi(p))
-        return tgmm_pdf(tgmm_table, theta, phi)
+    # Compute coefficients
+    sky = {
+        "type": "sunsky",
+        "sun_direction": [cp_sun * st, sp_sun * st, ct],
+        "turbidity": t,
+        "albedo": a
+    }
+    sample_func, pdf_func = mi.chi2.EmitterAdapter("sunsky", sky)
 
     test = mi.chi2.ChiSquareTest(
         domain=mi.chi2.SphericalDomain(),
-        pdf_func= pdf_adapter,
-        sample_func= lambda sample : sample_tgmm(tgmm_table, sample),
-        #sample_func=mi.warp.square_to_cosine_hemisphere,
-        sample_dim=2
+        pdf_func= pdf_func,
+        sample_func= sample_func,
+        sample_dim=2,
+        sample_count=100000000,
     )
 
     assert test.run()
 
 def plot_pdf():
-    t, eta = 7, dr.deg2rad(73)
+    a, t, eta = 0.5, 7, dr.deg2rad(73)
     render_shape = (1024, 1024//4)
 
-    _, dataset_tgmm = mi.array_from_file_f("sunsky-testing/res/datasets/tgmm_tables.bin")
-    tgmm_table = get_tgmm_table(dataset_tgmm, t, eta)
+    phi_sun = dr.pi/2
+    sp, cp = dr.sincos(phi_sun)
+    st, ct = dr.sincos(dr.pi/2 - eta)
 
-    phis, thetas = dr.meshgrid(
-        dr.linspace(mi.Float, 0, dr.two_pi, render_shape[0]),
-        dr.linspace(mi.Float, dr.pi/2, 0, render_shape[1]))
+    # Compute coefficients
+    sky = mi.load_dict({
+        "type": "sunsky",
+        "sun_direction": [cp * st, sp * st, ct],
+        "turbidity": t,
+        "albedo": a
+    })
 
-    pdf = tgmm_pdf(tgmm_table, thetas, phis) # & (thetas > 0.15)
+    directions = get_north_hemisphere_rays(render_shape)
 
-    # Check integral over domain
-    pdf_integral = dr.sum(pdf) * (dr.two_pi / render_shape[0]) * ((0.5*dr.pi) / render_shape[1])
-    dr.print(f"PDF integral: {pdf_integral}")
-    #assert dr.abs(pdf_integral - 1) < 0.01, f"PDF does not integrate to 1: {pdf_integral}"
+    # ================ Colored ==================
+    si = dr.zeros(mi.SurfaceInteraction3f)
+    si.wi = -directions
 
-    visual_pdf = dr.reshape(mi.TensorXf, pdf, render_shape[::-1])
+    color_render =  dr.reshape(mi.TensorXf, sky.eval(si), (render_shape[1], render_shape[0], 3))
 
-    # render sky
-    render = test_render(render_shape, t, 0.5, eta)
+    # ================== PDF ====================
+    it = dr.zeros(mi.Interaction3f)
+    ds = dr.zeros(mi.DirectionSample3f)
+    ds.d = directions
+
+    pdf_render = dr.reshape(mi.TensorXf, sky.pdf_direction(it, ds), (render_shape[1], render_shape[0]))
 
     fig, axes = plt.subplots(ncols=2)
-    axes[0].imshow(render)
+    axes[0].imshow(color_render)
     axes[0].axis('off')
-    axes[1].imshow(visual_pdf, cmap="gray")
+    axes[1].imshow(pdf_render, cmap="gray")
     axes[1].axis('off')
     plt.show()
 
@@ -239,7 +253,6 @@ def test_render(render_shape, t, a, eta, wavelengths=None):
     # Evaluate the sky model and reshape to image
     return dr.reshape(mi.TensorXf, sky.eval(si), (render_shape[1], render_shape[0], 3))
 
-
 def render_suite():
     resolution = (256*4, 256)
 
@@ -280,7 +293,7 @@ if __name__ == "__main__":
     test_gmm_values()
     test_get_tgmm_table()
     plot_pdf()
-    test_chi2_tgmm()
+    test_chi2_emitter()
 
     test_mean_radiance_data()
     test_radiance_data()
