@@ -19,22 +19,22 @@ def test_gmm_values():
 
     # Test for T=2, eta = 2°, 2nd gaussian weights
     index = 0 * (30 * 5 * 5) + 0 * (5 * 5) + 1 * 5 + dr.arange(mi.UInt32, 5)
-    expected = mi.Float(2.610391446, 0.463659442, 6, 0.444768602, 0.463477043)
+    expected = mi.Float(2.610391446, dr.pi/2 - 0.463659442, 6, 0.444768602, 0.463477043)
     assert dr.allclose(expected, dr.gather(mi.Float, tgmm_tables, index)), "Incorrect values for GGM (T=2, eta=2°, 2nd gaussian weights)"
 
     # Test for T=9, eta = 86°, 4th gaussian weights
     index = 7 * (30 * 5 * 5) + 28 * (5 * 5) + 3 * 5 + dr.arange(mi.UInt32, 5)
-    expected = mi.Float(0.605992344, 0.050513378, 1.991059441, 0.256612905, 0.153080459)
+    expected = mi.Float(0.605992344, dr.pi/2 - 0.050513378, 1.991059441, 0.256612905, 0.153080459)
     assert dr.allclose(expected, dr.gather(mi.Float, tgmm_tables, index)), "Incorrect values for GGM (T=9, eta=86°, 4nd gaussian weights)"
 
     # Test for T=6, eta = 41°, 3rd gaussian weights
     index = 4 * (30 * 5 * 5) + 13 * (5 * 5) + 2 * 5 + dr.arange(mi.UInt32, 5)
-    expected = mi.Float(1.565581977, 0.627374917, 0.258039383, 0.201905279, 0.087714186)
+    expected = mi.Float(1.565581977, dr.pi/2 - 0.627374917, 0.258039383, 0.201905279, 0.087714186)
     assert dr.allclose(expected, dr.gather(mi.Float, tgmm_tables, index)), "Incorrect values for GGM (T=6, eta=41°, 3rd gaussian weights)"
 
     # Test for T=7, eta = 50°, 5th gaussian weights
     index = 5 * (30 * 5 * 5) + 16 * (5 * 5) + 4 * 5 + dr.arange(mi.UInt32, 5)
-    expected = mi.Float(1.573958981, 0.171513533, 0.53386282, 0.474166945, 0.154709808)
+    expected = mi.Float(1.573958981, dr.pi/2 - 0.171513533, 0.53386282, 0.474166945, 0.154709808)
     assert dr.allclose(expected, dr.gather(mi.Float, tgmm_tables, index)), "Incorrect values for GGM (T=7, eta=50°, 5th gaussian weights)"
 
 def test_get_tgmm_table():
@@ -50,7 +50,7 @@ def test_get_tgmm_table():
     weights = dr.gather(mi.Float, table, GAUSSIAN_WEIGHT_IDX)
     assert dr.allclose(expected_weights, weights), "Incorrect values for GGM weights (T=2, eta=2°, 2nd gaussian weights)"
 
-    expected = mi.Float(2.610391446, 0.463659442, 6, 0.444768602, 0.463477043)
+    expected = mi.Float(2.610391446, dr.pi/2 - 0.463659442, 6, 0.444768602, 0.463477043)
     assert dr.allclose(expected, dr.gather(mi.Float, table, 1 * 5 + dr.arange(mi.UInt32, 5))), "Incorrect values for GGM (T=2, eta=2°, 2nd gaussian weights)"
 
     # Test for T=9, eta = 86°, 4th gaussian weights
@@ -60,17 +60,17 @@ def test_get_tgmm_table():
     weights = dr.gather(mi.Float, table, GAUSSIAN_WEIGHT_IDX)
     assert dr.allclose(expected_weights, weights), "Incorrect values for GGM weights (T=9, eta=86°, 4nd gaussian weights)"
 
-    expected = mi.Float(0.605992344, 0.050513378, 1.991059441, 0.256612905, 0.153080459)
+    expected = mi.Float(0.605992344, dr.pi/2 - 0.050513378, 1.991059441, 0.256612905, 0.153080459)
     assert dr.allclose(expected, dr.gather(mi.Float, table, 3 * 5 + dr.arange(mi.UInt32, 5))), "Incorrect values for GGM (T=9, eta=86°, 4nd gaussian weights)"
 
     # Test for T=6, eta = 41°, 3rd gaussian weights
     table = get_tgmm_table(tgmm_tables, 6, dr.deg2rad(41))
-    expected = mi.Float(1.565581977, 0.627374917, 0.258039383, 0.201905279, 0.087714186)
+    expected = mi.Float(1.565581977, dr.pi/2 - 0.627374917, 0.258039383, 0.201905279, 0.087714186)
     assert dr.allclose(expected, dr.gather(mi.Float, table, 2 * 5 + dr.arange(mi.UInt32, 5))), "Incorrect values for GGM (T=6, eta=41°, 3rd gaussian weights)"
 
     # Test for T=7, eta = 50°, 5th gaussian weights
     table = get_tgmm_table(tgmm_tables, 7, dr.deg2rad(50))
-    expected = mi.Float(1.573958981, 0.171513533, 0.53386282, 0.474166945, 0.154709808)
+    expected = mi.Float(1.573958981, dr.pi/2 - 0.171513533, 0.53386282, 0.474166945, 0.154709808)
     assert dr.allclose(expected, dr.gather(mi.Float, table, 4 * 5 + dr.arange(mi.UInt32, 5))), "Incorrect values for GGM (T=7, eta=50°, 5th gaussian weights)"
 
 def test_chi2_emitter():

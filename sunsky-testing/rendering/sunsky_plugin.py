@@ -150,7 +150,7 @@ class SunskyEmitter(mi.Emitter):
         ray_orig = mi.Point3f(dr.fma(v0, self.m_bsphere.radius,
                                      self.m_bsphere.center))
 
-        # Direction sampling TODO stays the same?
+        # Direction sampling
         v1 = mi.warp.square_to_cosine_hemisphere(sample_3)
         ray_dir = mi.Frame3f(-v0).to_world(v1)
 
@@ -158,7 +158,7 @@ class SunskyEmitter(mi.Emitter):
         wavelengths, weights = self.sample_wavelengths(
             mi.SurfaceInteraction3f(), wavelength_sample, active)
 
-        weights *= self.m_surface_area * dr.pi / tgmm_pdf(self.tgmm_table, v0, self.sun_phi, active) # TODO correct ?
+        weights /= tgmm_pdf(self.tgmm_table, v0, self.sun_phi, active)
 
         return mi.Ray3f(ray_orig, ray_dir, time, wavelengths), mi.depolarizer(weights)
 
@@ -171,11 +171,9 @@ class SunskyEmitter(mi.Emitter):
         local_direction = sample_gaussian(sample, gaussian, self.sun_phi)
         direction = dr.normalize(self.to_world @ local_direction)
 
-        # TODO why enlarge radius? bc of volumetric rendering?
         radius = dr.maximum(self.m_bsphere.radius, dr.norm(it.p - self.m_bsphere.center))
         dist = 2*radius
 
-        # TODO what is delta arg
         ds = mi.DirectionSample3f(
             p = dr.fma(direction, dist, it.p),
             n = -direction,
@@ -193,7 +191,6 @@ class SunskyEmitter(mi.Emitter):
         return ds, self.eval(si, active) / ds.pdf
 
     def pdf_direction(self, it, ds, active=True):
-        # TODO ds.d is towards me or away from me?
         local_direction = dr.normalize(self.to_world.inverse() @ ds.d)
         return tgmm_pdf(self.tgmm_table, local_direction, self.sun_phi, active)
 

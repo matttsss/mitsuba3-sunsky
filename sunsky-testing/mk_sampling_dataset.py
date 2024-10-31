@@ -19,7 +19,7 @@ def parse_csv_dataset(filename: str):
 
     sort_args = np.lexsort([arr[::, 1], arr[::, 0]])
     simplified_arr = arr[sort_args, 2:]
-    #simplified_arr[2] = np.pi - simplified_arr[2]
+    simplified_arr[::, 1] = np.pi/2 - simplified_arr[::, 1]
 
     shape = (9, 30, 5, 5)
     mi.array_to_file("sunsky-testing/res/datasets/tgmm_tables.bin", mi.Float(np.ravel(simplified_arr)), shape)

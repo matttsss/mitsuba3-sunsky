@@ -137,8 +137,6 @@ def tgmm_pdf(tgmm_table: mi.Float, direction: mi.Vector3f, sun_phi: mi.Float = d
     # Correction factor to center sun_azimuth at pi/2
     phi += dr.pi/2 - sun_phi
     phi = dr.select(phi < 0, phi + dr.two_pi, phi)
-    # tGMM model is defined with theta == elevation
-    theta = dr.pi / 2 - theta
 
     x = mi.Point2f(phi, theta)
     a = mi.Point2f(0.0, 0.0)
@@ -184,7 +182,7 @@ def sample_gaussian(sample: mi.Point2f, gaussian: mi.ArrayXf, sun_phi: mi.Float 
     sample = cdf_a + sample * (cdf_b - cdf_a)
     res = dr.sqrt_two * dr.erfinv(2 * sample - 1) * sigma + mu
 
-    return to_spherical(res[0] + (dr.pi/2 - sun_phi), dr.pi/2 - res[1])
+    return to_spherical(res[0] + (dr.pi/2 - sun_phi), res[1])
 
 
 def sample_tgmm(tgmm_table: mi.Float, sample: mi.Point2f, sun_phi: mi.Float = dr.pi/2, active=True) -> mi.Vector3f:
