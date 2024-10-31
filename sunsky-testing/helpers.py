@@ -1,19 +1,27 @@
 import drjit as dr
 import mitsuba as mi
 
+def to_spherical(phi: mi.Float, theta: mi.Float) -> mi.Vector3f:
+    sp, cp = dr.sincos(phi)
+    st, ct = dr.sincos(theta)
+    return mi.Vector3f(cp * st, sp * st, ct)
+
+def from_spherical(v: mi.Vector3f) -> mi.Vector2f:
+    """Returns (phi, theta)"""
+    return mi.Vector2f(dr.atan2(v[1], v[0]), dr.acos(v[2]))
+
+
 def get_north_hemisphere_rays(resolution, ret_thetas=False):
     phi, thetas = dr.meshgrid(
-        dr.linspace(mi.Float, -dr.pi, dr.pi, resolution[0]),
+        dr.linspace(mi.Float, 0, dr.two_pi, resolution[0]),
         dr.linspace(mi.Float, 0, dr.pi/2, resolution[1])
     )
 
-    st, ct = dr.sincos(thetas)
-    sp, cp = dr.sincos(phi)
-
     if ret_thetas:
-        return mi.Vector3f(cp * st, sp * st, ct), thetas
+        return to_spherical(phi, thetas), thetas
     else:
-        return mi.Vector3f(cp * st, sp * st, ct)
+        return to_spherical(phi, thetas)
+
 
 def get_camera_rays(cam_dir, apperture, image_res):
     cam_width, cam_height = apperture

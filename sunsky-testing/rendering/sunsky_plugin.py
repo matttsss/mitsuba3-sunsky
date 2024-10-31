@@ -1,7 +1,9 @@
 import drjit as dr
 import mitsuba as mi
 
-from .sunsky_data import get_params
+from .sunsky_data import (get_params, get_tgmm_table, GAUSSIAN_WEIGHT_IDX,
+                          NB_GAUSSIAN_PARAMS, sample_gaussian, tgmm_pdf)
+
 
 class SunskyEmitter(mi.Emitter):
 
@@ -56,19 +58,29 @@ class SunskyEmitter(mi.Emitter):
 
         # Get sun direction / elevation
         sun_elevation = 0.5 * dr.pi * (2/100)
-        self.m_up = props.get("to_world", mi.Transform4f(1)) @ mi.Vector3f(0, 0, 1)
+        self.to_world = props.get("to_world", mi.Transform4f(1))
+        self.m_up = self.to_world @ mi.Vector3f(0, 0, 1)
         self.m_sun_dir = dr.normalize(props.get("sun_direction", mi.Vector3f(dr.cos(sun_elevation), 0, dr.sin(sun_elevation))))
-        sun_elevation = dr.pi/2 - dr.acos(dr.dot(self.m_sun_dir, self.m_up))
 
-        # Get parameters
+        frame = mi.Frame3f(self.m_up)
+        self.sun_phi = dr.acos(frame.cos_phi(self.m_sun_dir))
+        self.sun_eta = dr.pi/2 - dr.acos(frame.cos_theta(self.m_sun_dir))
+
+        # Get luminance parameters
         _, database = mi.array_from_file_d(dataset_name + ".bin")
         _, database_rad = mi.array_from_file_d(dataset_name + "_rad.bin")
-        self.m_params = get_params(database, turb, albedo, sun_elevation)
-        self.m_rad = get_params(database_rad, turb, albedo, sun_elevation)
+        self.m_params = get_params(database, turb, albedo, self.sun_eta)
+        self.m_rad = get_params(database_rad, turb, albedo, self.sun_eta)
 
-        dr.eval(self.m_params, self.m_rad)
+        # Get sampling parameters
+        _, tgmm_tables = mi.array_from_file_f("sunsky-testing/res/datasets/tgmm_tables.bin")
+        self.tgmm_table = get_tgmm_table(tgmm_tables, turb, self.sun_eta)
+        self.gaussian_dist = mi.DiscreteDistribution(dr.gather(mi.Float, self.tgmm_table, GAUSSIAN_WEIGHT_IDX))
+        self.gaussian_dist.update()
 
         self.m_flags = mi.EmitterFlags.Infinite | mi.EmitterFlags.SpatiallyVarying
+
+        dr.eval(self.m_params, self.m_rad, self.tgmm_table, self.gaussian_dist)
 
     def set_scene(self, scene):
         if scene.bbox().valid():
@@ -94,7 +106,7 @@ class SunskyEmitter(mi.Emitter):
 
         return c1 * c2 * dr.gather(mi.Float, self.m_rad, idx, active)
 
-    @dr.syntax
+
     def eval(self, si, active=True):
         cos_theta = dr.dot(self.m_up, -si.wi)
         cos_gamma = dr.dot(self.m_sun_dir, -si.wi)
@@ -131,11 +143,14 @@ class SunskyEmitter(mi.Emitter):
 
     def sample_ray(self, time, wavelength_sample, sample_2, sample_3, active=True):
         # Spacial sampling
-        v0 = mi.warp.square_to_uniform_sphere(sample_2)
+        gaussian_idx, sample_2[0] = self.gaussian_dist.sample_reuse(sample_2[0])
+        gaussian = dr.gather(mi.ArrayXf, self.tgmm_table, gaussian_idx, active, shape=(NB_GAUSSIAN_PARAMS, 1))
+
+        v0 = sample_gaussian(sample_2, gaussian, self.sun_phi)
         ray_orig = mi.Point3f(dr.fma(v0, self.m_bsphere.radius,
                                      self.m_bsphere.center))
 
-        # Direction sampling
+        # Direction sampling TODO stays the same?
         v1 = mi.warp.square_to_cosine_hemisphere(sample_3)
         ray_dir = mi.Frame3f(-v0).to_world(v1)
 
@@ -143,14 +158,18 @@ class SunskyEmitter(mi.Emitter):
         wavelengths, weights = self.sample_wavelengths(
             mi.SurfaceInteraction3f(), wavelength_sample, active)
 
-        weights *= self.m_surface_area * dr.pi
+        weights *= self.m_surface_area * dr.pi / tgmm_pdf(self.tgmm_table, v0, self.sun_phi, active) # TODO correct ?
 
         return mi.Ray3f(ray_orig, ray_dir, time, wavelengths), mi.depolarizer(weights)
 
 
 
     def sample_direction(self, it, sample, active=True) -> (mi.DirectionSample3f, mi.Spectrum):
-        direction = mi.warp.square_to_uniform_sphere(sample)
+        gaussian_idx, sample[0] = self.gaussian_dist.sample_reuse(sample[0])
+        gaussian = dr.gather(mi.ArrayXf, self.tgmm_table, gaussian_idx, active, shape=(NB_GAUSSIAN_PARAMS, 1))
+
+        local_direction = sample_gaussian(sample, gaussian, self.sun_phi)
+        direction = dr.normalize(self.to_world @ local_direction)
 
         # TODO why enlarge radius? bc of volumetric rendering?
         radius = dr.maximum(self.m_bsphere.radius, dr.norm(it.p - self.m_bsphere.center))
@@ -162,7 +181,7 @@ class SunskyEmitter(mi.Emitter):
             n = -direction,
             uv = sample,
             time = it.time,
-            pdf = mi.warp.square_to_uniform_sphere_pdf(direction),
+            pdf = tgmm_pdf(self.tgmm_table, local_direction, self.sun_phi, active),
             delta = mi.Bool(False),
             d = direction,
             dist = dist,
@@ -174,7 +193,9 @@ class SunskyEmitter(mi.Emitter):
         return ds, self.eval(si, active) / ds.pdf
 
     def pdf_direction(self, it, ds, active=True):
-        return mi.warp.square_to_uniform_sphere_pdf(ds.d)
+        # TODO ds.d is towards me or away from me?
+        local_direction = dr.normalize(self.to_world.inverse() @ ds.d)
+        return tgmm_pdf(self.tgmm_table, local_direction, self.sun_phi, active)
 
 
     def eval_direction(self, it, ds, active=True):
