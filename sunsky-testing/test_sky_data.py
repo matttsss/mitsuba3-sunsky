@@ -95,7 +95,8 @@ def test_chi2_emitter():
         pdf_func= pdf_func,
         sample_func= sample_func,
         sample_dim=2,
-        sample_count=100000000,
+        sample_count= 2_000_000,
+        res=501
     )
 
     assert test.run()

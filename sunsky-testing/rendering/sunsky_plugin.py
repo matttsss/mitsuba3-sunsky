@@ -62,19 +62,19 @@ class SunskyEmitter(mi.Emitter):
         self.m_up = self.to_world @ mi.Vector3f(0, 0, 1)
         self.m_sun_dir = dr.normalize(props.get("sun_direction", mi.Vector3f(dr.cos(sun_elevation), 0, dr.sin(sun_elevation))))
 
-        frame = mi.Frame3f(self.m_up)
-        self.sun_phi = dr.acos(frame.cos_phi(self.m_sun_dir))
-        self.sun_eta = dr.pi/2 - dr.acos(frame.cos_theta(self.m_sun_dir))
+        self.frame = mi.Frame3f(self.m_up)
+        self.sun_phi = dr.acos(self.frame.cos_phi(self.m_sun_dir))
+        sun_eta = dr.pi/2 - dr.acos(self.frame.cos_theta(self.m_sun_dir))
 
         # Get luminance parameters
         _, database = mi.array_from_file_d(dataset_name + ".bin")
         _, database_rad = mi.array_from_file_d(dataset_name + "_rad.bin")
-        self.m_params = get_params(database, turb, albedo, self.sun_eta)
-        self.m_rad = get_params(database_rad, turb, albedo, self.sun_eta)
+        self.m_params = get_params(database, turb, albedo, sun_eta)
+        self.m_rad = get_params(database_rad, turb, albedo, sun_eta)
 
         # Get sampling parameters
         _, tgmm_tables = mi.array_from_file_f("sunsky-testing/res/datasets/tgmm_tables.bin")
-        self.tgmm_table = get_tgmm_table(tgmm_tables, turb, self.sun_eta)
+        self.tgmm_table = get_tgmm_table(tgmm_tables, turb, sun_eta)
         self.gaussian_dist = mi.DiscreteDistribution(dr.gather(mi.Float, self.tgmm_table, GAUSSIAN_WEIGHT_IDX))
         self.gaussian_dist.update()
 
@@ -108,7 +108,7 @@ class SunskyEmitter(mi.Emitter):
 
 
     def eval(self, si, active=True):
-        cos_theta = dr.dot(self.m_up, -si.wi)
+        cos_theta = self.frame.cos_theta(-si.wi)
         cos_gamma = dr.dot(self.m_sun_dir, -si.wi)
 
         active &= cos_theta >= 0
@@ -188,11 +188,13 @@ class SunskyEmitter(mi.Emitter):
         si = dr.zeros(mi.SurfaceInteraction3f)
         si.wavelengths = it.wavelengths
 
-        return ds, self.eval(si, active) / ds.pdf
+        sin_theta = self.frame.sin_theta(local_direction)
+        return ds, dr.maximum(sin_theta, 0.01) * self.eval(si, active) / ds.pdf
 
     def pdf_direction(self, it, ds, active=True):
         local_direction = dr.normalize(self.to_world.inverse() @ ds.d)
-        return tgmm_pdf(self.tgmm_table, local_direction, self.sun_phi, active)
+        sin_theta = self.frame.sin_theta(local_direction)
+        return tgmm_pdf(self.tgmm_table, local_direction, self.sun_phi, active) / dr.maximum(sin_theta, 0.01)
 
 
     def eval_direction(self, it, ds, active=True):
@@ -208,14 +210,6 @@ class SunskyEmitter(mi.Emitter):
         si.wavelengths = mi.sample_shifted(sample) * inv_pdf + min_lbda
         return si.wavelengths, inv_pdf * self.eval(si, active)
 
-    def sample_position(self, ref, ds, active = True):
-        dr.assert_true(False, "Sample position not implemented")
-
-
-    def traverse(self, callback):
-        callback.put_parameter('sun_dir', self.m_sun_dir)
-        callback.put_parameter('albedo', self.m_albedo)
-        callback.put_parameter('turbidity', self.m_turb)
 
     def is_environment(self):
         return True
