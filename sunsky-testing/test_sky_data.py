@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 mi.set_variant("cuda_rgb")
 
 from rendering.sunsky_plugin import SunskyEmitter
-from helpers import get_north_hemisphere_rays
+from helpers import get_north_hemisphere_rays, get_spherical_rays
 from rendering.sunsky_data import get_tgmm_table, GAUSSIAN_WEIGHT_IDX
 
 
@@ -36,6 +36,16 @@ def test_gmm_values():
     index = 5 * (30 * 5 * 5) + 16 * (5 * 5) + 4 * 5 + dr.arange(mi.UInt32, 5)
     expected = mi.Float(1.573958981, dr.pi/2 - 0.171513533, 0.53386282, 0.474166945, 0.154709808)
     assert dr.allclose(expected, dr.gather(mi.Float, tgmm_tables, index)), "Incorrect values for GGM (T=7, eta=50°, 5th gaussian weights)"
+
+    # Test for T=7, eta = 17°, 1st gaussian weights
+    index = 5 * (30 * 5 * 5) + 5 * (5 * 5) + 0 * 5 + dr.arange(mi.UInt32, 5)
+    expected = mi.Float(1.566658095, dr.pi/2 - 0.166290113, 0.214694754, 0.198158572, 0.168340449)
+    assert dr.allclose(expected, dr.gather(mi.Float, tgmm_tables, index)), "Incorrect values for GGM (T=7, eta=17°, 1st gaussian weights)"
+
+    # Test for T=7, eta = 17°, 2nd gaussian weights
+    index = 5 * (30 * 5 * 5) + 5 * (5 * 5) + 1 * 5 + dr.arange(mi.UInt32, 5)
+    expected = mi.Float(2.58563806, dr.pi/2 - 0.16556515, 6, 0.566080821, 0.432566046)
+    assert dr.allclose(expected, dr.gather(mi.Float, tgmm_tables, index)), "Incorrect values for GGM (T=7, eta=17°, 2nd gaussian weights)"
 
 def test_get_tgmm_table():
     dr.print("Testing get GMM tables")
@@ -102,8 +112,8 @@ def test_chi2_emitter():
     assert test.run()
 
 def plot_pdf():
-    a, t, eta = 0.5, 7, dr.deg2rad(73)
-    render_shape = (1024, 1024//4)
+    a, t, eta = 0.5, 7, dr.deg2rad(65)
+    render_shape = (512//4, 512)
 
     phi_sun = dr.pi/2
     sp, cp = dr.sincos(phi_sun)
@@ -117,26 +127,54 @@ def plot_pdf():
         "albedo": a
     })
 
-    directions = get_north_hemisphere_rays(render_shape)
-
-    # ================ Colored ==================
     si = dr.zeros(mi.SurfaceInteraction3f)
-    si.wi = -directions
-
-    color_render =  dr.reshape(mi.TensorXf, sky.eval(si), (render_shape[1], render_shape[0], 3))
-
-    # ================== PDF ====================
     it = dr.zeros(mi.Interaction3f)
     ds = dr.zeros(mi.DirectionSample3f)
-    ds.d = directions
+    hemisphere_dir, (_, thetas) = get_north_hemisphere_rays(render_shape, True)
 
-    pdf_render = dr.reshape(mi.TensorXf, sky.pdf_direction(it, ds), (render_shape[1], render_shape[0]))
+    # ================ Colored -> PDF ==================
+    si.wi = -get_spherical_rays(render_shape)
 
-    fig, axes = plt.subplots(ncols=2)
-    axes[0].imshow(color_render)
-    axes[0].axis('off')
-    axes[1].imshow(pdf_render, cmap="gray")
-    axes[1].axis('off')
+    color_render = dr.reshape(mi.TensorXf, sky.eval(si), (*render_shape, 3))
+
+    envmap = mi.load_dict({
+        "type": "envmap",
+        "bitmap": mi.Bitmap(color_render)
+    })
+
+    ds.d = mi.Vector3f(hemisphere_dir.y, hemisphere_dir.z, -hemisphere_dir.x)
+
+    pdf_ref = envmap.pdf_direction(it, ds)
+
+    # ==================     PDF     ====================
+    ds.d = hemisphere_dir
+    pdf_render = sky.pdf_direction(it, ds)
+
+    # ================  RELATIVE ERROR  ==================
+    relative_error = dr.abs((pdf_ref - pdf_render) / pdf_ref)
+
+    pdf_ref = dr.reshape(mi.TensorXf, pdf_ref, render_shape)
+    pdf_render = dr.reshape(mi.TensorXf, pdf_render, render_shape)
+    relative_error = dr.reshape(mi.TensorXf, relative_error, render_shape)
+
+    fig, axes = plt.subplots(ncols=2, nrows=2)
+
+    axes[0][0].imshow(pdf_ref)
+    axes[0][0].axis('off')
+    axes[0][0].set_title("Bitmap PDF")
+
+    vmax = dr.max(pdf_ref)
+    axes[0][1].imshow(pdf_render, vmin=0, vmax=dr.ravel(vmax)[0])
+    axes[0][1].axis('off')
+    axes[0][1].set_title("tGMM PDF")
+
+    axes[1][0].imshow(relative_error, vmin=0, vmax=1)
+    axes[1][0].axis('off')
+    axes[1][0].set_title("Relative error")
+
+    fig.delaxes(axes[1][1])
+
+    plt.tight_layout()
     plt.show()
 
 
@@ -293,10 +331,11 @@ if __name__ == "__main__":
 
     test_gmm_values()
     test_get_tgmm_table()
+    test_mean_radiance_data()
+    test_radiance_data()
+
     plot_pdf()
     test_chi2_emitter()
 
-    test_mean_radiance_data()
-    test_radiance_data()
     #test_plot_spectral() FIXME solve std::bad_cast error
     #render_suite()

@@ -158,7 +158,7 @@ def tgmm_pdf(tgmm_table: mi.Float, direction: mi.Vector3f, sun_phi: mi.Float = d
 
         pdf += coefs[4] * unbounded_pdf / volume
 
-    return pdf & (theta >= 0) & (theta <= dr.pi / 2) & (phi >= 0) & (phi <= dr.two_pi)
+    return pdf & (theta > 0) & (theta <= dr.pi / 2) & (phi >= 0) & (phi <= dr.two_pi)
 
 def sample_gaussian(sample: mi.Point2f, gaussian: mi.ArrayXf, sun_phi: mi.Float = dr.pi/2) -> mi.Vector3f:
     """
