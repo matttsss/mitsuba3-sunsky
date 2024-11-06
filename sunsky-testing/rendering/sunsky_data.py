@@ -82,13 +82,13 @@ def get_params(dataset: mi.Float, t: mi.Int | mi.Float, a: mi.Int | mi.Float, et
     return res & ((1 <= t <= NB_TURBIDITY) & (0 <= eta <= 0.5 * dr.pi))
 
 
-def get_tgmm_table(dataset: mi.Float, t: mi.Float, eta: mi.Float):
+def get_tgmm_table(dataset: mi.Float, t: mi.Float, eta: mi.Float) -> tuple[mi.Point2f, tuple[mi.Float, mi.Float, mi.Float, mi.Float]]:
     """
     Get the Truncated Gaussian Mixture Model table for the given parameters
     :param dataset: Main dataset to interpolate from (shape: (TURBIDITY, ETAs, NB_GAUSSIANS, NB_PARAMS))
     :param t: Turbidity of the model in [1, 10]
     :param eta: Elevation of the sun in [0, pi/2]
-    :return: Interpolated TGMM table of shape (NB_GAUSSIANS, NB_PARAMS)
+    :return: The 4 data points of the TGMM model and the lerp values (mi.Point2f(t_factor, eta_factor), (tl_el, th_el, tl_eh, th_eh))
     """
 
     dr.assert_true(0 <= eta <= 0.5 * dr.pi, "Sun elevation is not between 0 and %f (pi/2): %f", (dr.pi/2, eta))
@@ -112,33 +112,49 @@ def get_tgmm_table(dataset: mi.Float, t: mi.Float, eta: mi.Float):
 
     idx_range = dr.arange(mi.UInt32, eta_block_size)
 
-    res_t_low = dr.lerp(dr.gather(mi.Float, dataset, t_idx_low * t_block_size + eta_idx_low * eta_block_size + idx_range),
-                        dr.gather(mi.Float, dataset, t_idx_low * t_block_size + eta_idx_high * eta_block_size + idx_range), eta_rem)
-    res_t_high = dr.lerp(dr.gather(mi.Float, dataset, t_idx_high * t_block_size + eta_idx_low * eta_block_size + idx_range),
-                         dr.gather(mi.Float, dataset, t_idx_high * t_block_size + eta_idx_high * eta_block_size + idx_range), eta_rem)
+    tl_el = dr.gather(mi.Float, dataset, t_idx_low * t_block_size + eta_idx_low * eta_block_size + idx_range)
+    th_el = dr.gather(mi.Float, dataset, t_idx_high * t_block_size + eta_idx_low * eta_block_size + idx_range)
+    tl_eh = dr.gather(mi.Float, dataset, t_idx_low * t_block_size + eta_idx_high * eta_block_size + idx_range)
+    th_eh = dr.gather(mi.Float, dataset, t_idx_high * t_block_size + eta_idx_high * eta_block_size + idx_range)
 
-    return dr.lerp(res_t_low, res_t_high, t_rem)
+    return mi.Point2f(t_rem, eta_rem), (tl_el, th_el, tl_eh, th_eh)
 
 
 def gaussian_cdf(x, mu, sigma):
     return 0.5 * (1 + dr.erf(dr.inv_sqrt_two * (x - mu) / sigma))
 
-
-def tgmm_pdf(tgmm_table: mi.Float, direction: mi.Vector3f, sun_phi: mi.Float = dr.pi/2, active=True) -> mi.Float:
+def tgmm_pdf_full(tgmm_params: tuple[mi.Point2f, tuple[mi.Float, mi.Float, mi.Float, mi.Float]],
+                  direction: mi.Vector3f, sun_phi: mi.Float = dr.pi/2, active=True) -> mi.Float:
     """
     Evaluate the TGMM PDF at the given angles
-    :param tgmm_table: TGMM table to evaluate
+    :param tgmm_params: TGMM parameters to evaluate
     :param direction: Viewing direction
     :param sun_phi: Sun azimuth angle
     :return: PDF value
     """
-    phi, theta = from_spherical(direction)
+    t_factor, eta_factor = tgmm_params[0]
+    tl_el, th_el, tl_eh, th_eh = tgmm_params[1]
 
-    # Correction factor to center sun_azimuth at pi/2
+    phi, theta = from_spherical(direction)
     phi += dr.pi/2 - sun_phi
     phi = dr.select(phi < 0, phi + dr.two_pi, phi)
 
+    active &= (theta > 0) & (theta <= dr.pi / 2) & (phi >= 0) & (phi <= dr.two_pi)
+
     x = mi.Point2f(phi, theta)
+    pdf_el = dr.lerp(tgmm_pdf(tl_el, x, active), tgmm_pdf(th_el, x, active), t_factor)
+    pdf_eh = dr.lerp(tgmm_pdf(tl_eh, x, active), tgmm_pdf(th_eh, x, active), t_factor)
+
+    return dr.lerp(pdf_el, pdf_eh, eta_factor) & active
+
+
+def tgmm_pdf(tgmm_table: mi.Float, angles: mi.Point2f, active=True) -> mi.Float:
+    """
+    Evaluate the TGMM PDF at the given angles
+    :param tgmm_table: TGMM table to evaluate
+    :param angles: Viewing angles
+    :return: PDF value
+    """
     a = mi.Point2f(0.0, 0.0)
     b = mi.Point2f(dr.two_pi, dr.pi/2)
 
@@ -154,11 +170,11 @@ def tgmm_pdf(tgmm_table: mi.Float, direction: mi.Vector3f, sun_phi: mi.Float = d
 
         volume = (cdf_b[0] - cdf_a[0]) * (cdf_b[1] - cdf_a[1]) * (sigma[0] * sigma[1])
 
-        unbounded_pdf = mi.warp.square_to_std_normal_pdf((x - mu) / sigma)
+        unbounded_pdf = mi.warp.square_to_std_normal_pdf((angles - mu) / sigma)
 
         pdf += coefs[4] * unbounded_pdf / volume
 
-    return pdf & (theta > 0) & (theta <= dr.pi / 2) & (phi >= 0) & (phi <= dr.two_pi)
+    return pdf & active
 
 def sample_gaussian(sample: mi.Point2f, gaussian: mi.ArrayXf, sun_phi: mi.Float = dr.pi/2) -> mi.Vector3f:
     """

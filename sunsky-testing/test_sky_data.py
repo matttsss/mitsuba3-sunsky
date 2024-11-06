@@ -84,8 +84,8 @@ def test_get_tgmm_table():
     assert dr.allclose(expected, dr.gather(mi.Float, table, 4 * 5 + dr.arange(mi.UInt32, 5))), "Incorrect values for GGM (T=7, eta=50°, 5th gaussian weights)"
 
 def test_chi2_emitter():
-    t, a = 3, 0.5
-    eta = dr.deg2rad(55)
+    t, a = 7, 0.5
+    eta = dr.deg2rad(45)
     phi_sun = dr.pi/2
 
     sp_sun, cp_sun = dr.sincos(phi_sun)
@@ -105,17 +105,17 @@ def test_chi2_emitter():
         pdf_func= pdf_func,
         sample_func= sample_func,
         sample_dim=2,
-        sample_count= 2_000_000,
+        sample_count= 200_000_000,
         res=501
     )
 
     assert test.run()
 
 def plot_pdf():
-    a, t, eta = 0.5, 7, dr.deg2rad(65)
+    a, t, eta = 0.5, 7, dr.deg2rad(45.5)
     render_shape = (512//4, 512)
 
-    phi_sun = dr.pi/2
+    phi_sun = dr.pi * 31/20
     sp, cp = dr.sincos(phi_sun)
     st, ct = dr.sincos(dr.pi/2 - eta)
 
@@ -329,13 +329,13 @@ def test_plot_spectral():
 if __name__ == "__main__":
     #mi.write_sky_model_data_v2("sunsky-testing/res/datasets/ssm_dataset")
 
-    test_gmm_values()
-    test_get_tgmm_table()
+    #test_gmm_values()
+    #test_get_tgmm_table()
     test_mean_radiance_data()
     test_radiance_data()
 
     plot_pdf()
-    #test_chi2_emitter()
+    test_chi2_emitter()
 
     #test_plot_spectral() FIXME solve std::bad_cast error
     #render_suite()

@@ -2,7 +2,7 @@ import drjit as dr
 import mitsuba as mi
 
 from .sunsky_data import (get_params, get_tgmm_table, GAUSSIAN_WEIGHT_IDX,
-                          NB_GAUSSIAN_PARAMS, sample_gaussian, tgmm_pdf)
+                          NB_GAUSSIAN_PARAMS, sample_gaussian, tgmm_pdf, tgmm_pdf_full)
 
 SIN_OFFSET = 0.01
 
@@ -63,7 +63,12 @@ class SunskyEmitter(mi.Emitter):
         self.m_sun_dir = dr.normalize(props.get("sun_direction"))
 
         self.frame = mi.Frame3f(self.m_up)
-        self.sun_phi = dr.acos(self.frame.cos_phi(self.m_sun_dir))
+        cos_phi = self.frame.cos_phi(self.m_sun_dir)
+        sin_phi = self.frame.sin_phi(self.m_sun_dir)
+
+        self.sun_phi = dr.acos(cos_phi)
+        self.sun_phi = dr.select(sin_phi >= 0, self.sun_phi, dr.two_pi - self.sun_phi)
+
         sun_eta = dr.pi / 2 - dr.acos(self.frame.cos_theta(self.m_sun_dir))
 
         # Get luminance parameters
@@ -74,13 +79,24 @@ class SunskyEmitter(mi.Emitter):
 
         # Get sampling parameters
         _, tgmm_tables = mi.array_from_file_f("sunsky-testing/res/datasets/tgmm_tables.bin")
-        self.tgmm_table = get_tgmm_table(tgmm_tables, turb, sun_eta)
-        self.gaussian_dist = mi.DiscreteDistribution(dr.gather(mi.Float, self.tgmm_table, GAUSSIAN_WEIGHT_IDX))
-        self.gaussian_dist.update()
+        self.tgmm_params = get_tgmm_table(tgmm_tables, turb, sun_eta)
+        lf = self.tgmm_params[0]
+        lerp_values = [(1 - lf[0]) * (1 - lf[1]),
+                       lf[0] * (1 - lf[1]),
+                       (1 - lf[0]) * lf[1],
+                       lf[0] * lf[1]]
+
+        temp = [0.0] * (4 * 5)
+        for i in range(4):
+            temp_i = dr.gather(mi.Float, self.tgmm_params[1][i], GAUSSIAN_WEIGHT_IDX)
+            for j in range(5):
+                temp[i * 5 + j] = temp_i[j] * lerp_values[i]
+
+        self.gaussian_dist = mi.DiscreteDistribution(dr.ravel(temp))
 
         self.m_flags = mi.EmitterFlags.Infinite | mi.EmitterFlags.SpatiallyVarying
 
-        dr.eval(self.m_params, self.m_rad, self.tgmm_table, self.gaussian_dist)
+        dr.eval(self.m_params, self.m_rad, *self.tgmm_params[1], self.gaussian_dist)
 
     def set_scene(self, scene):
         if scene.bbox().valid():
@@ -165,14 +181,17 @@ class SunskyEmitter(mi.Emitter):
         return mi.Ray3f(ray_orig, ray_dir, time, wavelengths) & active, mi.depolarizer(weights) & active
 
     def sample_direction(self, it, sample, active=True) -> (mi.DirectionSample3f, mi.Spectrum):
-        gaussian_idx, sample[0] = self.gaussian_dist.sample_reuse(sample[0], active)
-        gaussian = dr.gather(mi.ArrayXf, self.tgmm_table, gaussian_idx, active, shape=(NB_GAUSSIAN_PARAMS, 1))
+        glb_idx, sample[0] = self.gaussian_dist.sample_reuse(sample[0], active)
+
+        table_idx = (glb_idx // 5)[0]
+        gaussian_idx = glb_idx % 5
+        gaussian = dr.gather(mi.ArrayXf, self.tgmm_params[1][table_idx], gaussian_idx, active, shape=(NB_GAUSSIAN_PARAMS, 1))
 
         local_direction = sample_gaussian(sample, gaussian, self.sun_phi)
         direction = dr.normalize(self.to_world @ local_direction)
         sin_theta = dr.maximum(self.frame.sin_theta(direction), SIN_OFFSET)
 
-        pdf = tgmm_pdf(self.tgmm_table, local_direction, self.sun_phi, active) / sin_theta
+        pdf = tgmm_pdf_full(self.tgmm_params, local_direction, self.sun_phi, active) / sin_theta
 
         radius = dr.maximum(self.m_bsphere.radius, dr.norm(it.p - self.m_bsphere.center))
         dist = 2 * radius
@@ -196,10 +215,11 @@ class SunskyEmitter(mi.Emitter):
     def pdf_direction(self, it, ds, active=True):
         local_direction = dr.normalize(self.to_world.inverse() @ ds.d)
         sin_theta = self.frame.sin_theta(ds.d)
-        return tgmm_pdf(self.tgmm_table, local_direction, self.sun_phi, active) / (dr.maximum(sin_theta, SIN_OFFSET))
+        return tgmm_pdf_full(self.tgmm_params, local_direction, self.sun_phi, active) / (dr.maximum(sin_theta, SIN_OFFSET))
 
     def eval_direction(self, it, ds, active=True):
         si = dr.zeros(mi.SurfaceInteraction3f)
+        # TODO set direction
         si.wavelengths = it.wavelengths
         return self.eval(si, active)
 
