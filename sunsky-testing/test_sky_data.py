@@ -159,12 +159,12 @@ def plot_pdf():
 
     fig, axes = plt.subplots(ncols=2, nrows=2)
 
-    axes[0][0].imshow(pdf_ref)
+    vmax = dr.ravel(dr.max(pdf_ref))[0]
+    axes[0][0].imshow(pdf_ref, vmin=0, vmax=vmax)
     axes[0][0].axis('off')
     axes[0][0].set_title("Bitmap PDF")
 
-    vmax = dr.max(pdf_ref)
-    axes[0][1].imshow(pdf_render, vmin=0, vmax=dr.ravel(vmax)[0])
+    axes[0][1].imshow(pdf_render, vmin=0, vmax=vmax)
     axes[0][1].axis('off')
     axes[0][1].set_title("tGMM PDF")
 
@@ -335,7 +335,7 @@ if __name__ == "__main__":
     test_radiance_data()
 
     plot_pdf()
-    test_chi2_emitter()
+    #test_chi2_emitter()
 
     #test_plot_spectral() FIXME solve std::bad_cast error
     #render_suite()
