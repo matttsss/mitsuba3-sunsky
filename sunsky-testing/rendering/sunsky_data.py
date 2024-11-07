@@ -82,13 +82,13 @@ def get_params(dataset: mi.Float, t: mi.Int | mi.Float, a: mi.Int | mi.Float, et
     return res & ((1 <= t <= NB_TURBIDITY) & (0 <= eta <= 0.5 * dr.pi))
 
 
-def get_tgmm_table(dataset: mi.Float, t: mi.Float, eta: mi.Float) -> tuple[mi.Point2f, tuple[mi.Float, mi.Float, mi.Float, mi.Float]]:
+def get_tgmm_table(dataset: mi.Float, t: mi.Float, eta: mi.Float) -> tuple[mi.Float, mi.Float]:
     """
     Get the Truncated Gaussian Mixture Model table for the given parameters
     :param dataset: Main dataset to interpolate from (shape: (TURBIDITY, ETAs, NB_GAUSSIANS, NB_PARAMS))
     :param t: Turbidity of the model in [1, 10]
     :param eta: Elevation of the sun in [0, pi/2]
-    :return: The 4 data points of the TGMM model and the lerp values (mi.Point2f(t_factor, eta_factor), (tl_el, th_el, tl_eh, th_eh))
+    :return: The gaussian sampling weights and the gaussian parameters
     """
 
     dr.assert_true(0 <= eta <= 0.5 * dr.pi, "Sun elevation is not between 0 and %f (pi/2): %f", (dr.pi/2, eta))
@@ -110,30 +110,41 @@ def get_tgmm_table(dataset: mi.Float, t: mi.Float, eta: mi.Float) -> tuple[mi.Po
     t_block_size = len(dataset) // (NB_TURBIDITY - 1)
     eta_block_size = t_block_size // NB_ETAS
 
-    idx_range = dr.arange(mi.UInt32, eta_block_size)
 
-    tl_el = dr.gather(mi.Float, dataset, t_idx_low * t_block_size + eta_idx_low * eta_block_size + idx_range)
-    th_el = dr.gather(mi.Float, dataset, t_idx_high * t_block_size + eta_idx_low * eta_block_size + idx_range)
-    tl_eh = dr.gather(mi.Float, dataset, t_idx_low * t_block_size + eta_idx_high * eta_block_size + idx_range)
-    th_eh = dr.gather(mi.Float, dataset, t_idx_high * t_block_size + eta_idx_high * eta_block_size + idx_range)
+    # Build index range to gather the 4 tGMM distribution parameters
+    idx_idx = dr.arange(mi.UInt32, 4 * eta_block_size)
+    idx = dr.tile(dr.arange(mi.UInt32, eta_block_size), 4)
 
-    return mi.Point2f(t_rem, eta_rem), (tl_el, th_el, tl_eh, th_eh)
+    is_t_low = idx_idx < 2 * eta_block_size
+    idx += t_block_size * dr.select(is_t_low, t_idx_low, t_idx_high)
+
+    is_eta_low = (idx_idx < eta_block_size) | (idx_idx >= 3 * eta_block_size)
+    idx += eta_block_size * dr.select(is_eta_low, eta_idx_low, eta_idx_high)
+
+    distrib_params = dr.gather(mi.Float, dataset, idx)
 
 
-def gaussian_cdf(x, mu, sigma):
-    return 0.5 * (1 + dr.erf(dr.inv_sqrt_two * (x - mu) / sigma))
+    # Apply lerp weights to the truncated gaussian weights
+    is_tgaussian_weight = idx_idx % 5 == 4
+    distrib_params *= dr.select(is_tgaussian_weight & is_t_low, (1 - t_rem), 1)
+    distrib_params *= dr.select(is_tgaussian_weight & ~is_t_low, t_rem, 1)
+    distrib_params *= dr.select(is_tgaussian_weight & is_eta_low, (1 - eta_rem), 1)
+    distrib_params *= dr.select(is_tgaussian_weight & ~is_eta_low, eta_rem, 1)
 
-def tgmm_pdf_full(tgmm_params: tuple[mi.Point2f, tuple[mi.Float, mi.Float, mi.Float, mi.Float]],
-                  direction: mi.Vector3f, sun_phi: mi.Float = dr.pi/2, active=True) -> mi.Float:
+    weight_idx = 5 * dr.arange(mi.UInt32, 4 * NB_GAUSSIAN_PARAMS) + 4
+    mis_weights = dr.gather(mi.Float, distrib_params, weight_idx)
+
+    # TODO "Transfer to Array"
+    return mis_weights, distrib_params
+
+def tgmm_pdf(gaussians: mi.ArrayXf, direction: mi.Vector3f, sun_phi: mi.Float = dr.pi/2, active=True) -> mi.Float:
     """
     Evaluate the TGMM PDF at the given angles
-    :param tgmm_params: TGMM parameters to evaluate
+    :param gaussians: gaussian parameters of shape [20, 5]
     :param direction: Viewing direction
     :param sun_phi: Sun azimuth angle
     :return: PDF value
     """
-    t_factor, eta_factor = tgmm_params[0]
-    tl_el, th_el, tl_eh, th_eh = tgmm_params[1]
 
     phi, theta = from_spherical(direction)
     phi += dr.pi/2 - sun_phi
@@ -142,41 +153,33 @@ def tgmm_pdf_full(tgmm_params: tuple[mi.Point2f, tuple[mi.Float, mi.Float, mi.Fl
     active &= (theta > 0) & (theta <= dr.pi / 2) & (phi >= 0) & (phi <= dr.two_pi)
 
     x = mi.Point2f(phi, theta)
-    pdf_el = dr.lerp(tgmm_pdf(tl_el, x, active), tgmm_pdf(th_el, x, active), t_factor)
-    pdf_eh = dr.lerp(tgmm_pdf(tl_eh, x, active), tgmm_pdf(th_eh, x, active), t_factor)
-
-    return dr.lerp(pdf_el, pdf_eh, eta_factor) & active
-
-
-def tgmm_pdf(tgmm_table: mi.Float, angles: mi.Point2f, active=True) -> mi.Float:
-    """
-    Evaluate the TGMM PDF at the given angles
-    :param tgmm_table: TGMM table to evaluate
-    :param angles: Viewing angles
-    :return: PDF value
-    """
     a = mi.Point2f(0.0, 0.0)
     b = mi.Point2f(dr.two_pi, dr.pi/2)
 
     pdf = mi.Float(0.0)
-    for i in range(NB_GAUSSIANS):
-        coefs = dr.gather(mi.ArrayXf, tgmm_table, i, active, shape=(NB_GAUSSIAN_PARAMS, 1))
-
-        mu = mi.Point2f(coefs[0], coefs[1])
-        sigma = mi.Point2f(coefs[2], coefs[3])
-
-        cdf_a = gaussian_cdf(a, mu, sigma)
-        cdf_b = gaussian_cdf(b, mu, sigma)
-
-        volume = (cdf_b[0] - cdf_a[0]) * (cdf_b[1] - cdf_a[1]) * (sigma[0] * sigma[1])
-
-        unbounded_pdf = mi.warp.square_to_std_normal_pdf((angles - mu) / sigma)
-
-        pdf += coefs[4] * unbounded_pdf / volume
+    for i in range(4 * NB_GAUSSIANS):
+        gaussian = dr.gather(mi.ArrayXf, gaussians, i, active, shape=(NB_GAUSSIAN_PARAMS, 1))
+        pdf += tgaussian_pdf(gaussian, x, a, b)
 
     return pdf & active
 
-def sample_gaussian(sample: mi.Point2f, gaussian: mi.ArrayXf, sun_phi: mi.Float = dr.pi/2) -> mi.Vector3f:
+def gaussian_cdf(x, mu, sigma):
+    return 0.5 * (1 + dr.erf(dr.inv_sqrt_two * (x - mu) / sigma))
+
+def tgaussian_pdf(gaussian_params: mi.TensorXf, angles: mi.Point2f, a: mi.Point2f, b: mi.Point2f) -> mi.Float:
+    mu = mi.Point2f(gaussian_params[0], gaussian_params[1])
+    sigma = mi.Point2f(gaussian_params[2], gaussian_params[3])
+
+    cdf_a = gaussian_cdf(a, mu, sigma)
+    cdf_b = gaussian_cdf(b, mu, sigma)
+
+    volume = (cdf_b[0] - cdf_a[0]) * (cdf_b[1] - cdf_a[1]) * (sigma[0] * sigma[1])
+
+    unbounded_pdf = mi.warp.square_to_std_normal_pdf((angles - mu) / sigma)
+
+    return gaussian_params[4] * unbounded_pdf / volume
+
+def sample_gaussian(sample: mi.Point2f, gaussian: mi.TensorXf, sun_phi: mi.Float = dr.pi/2) -> mi.Vector3f:
     """
     Sample a 2D gaussian distribution
     :param sample: 2D sample point
@@ -199,21 +202,3 @@ def sample_gaussian(sample: mi.Point2f, gaussian: mi.ArrayXf, sun_phi: mi.Float 
     res = dr.sqrt_two * dr.erfinv(2 * sample - 1) * sigma + mu
 
     return to_spherical(res[0] + (dr.pi/2 - sun_phi), res[1])
-
-
-def sample_tgmm(tgmm_table: mi.Float, sample: mi.Point2f, sun_phi: mi.Float = dr.pi/2, active=True) -> mi.Vector3f:
-    """
-    Sample the TGMM model at the given point
-    :param tgmm_table: TGMM table containing the gaussian parameters
-    :param sample: 2D sample point
-    :param sun_phi: Sun azimuth angle
-    :return: Sampled point
-    """
-
-    dist = mi.DiscreteDistribution(dr.gather(mi.Float, tgmm_table, GAUSSIAN_WEIGHT_IDX, active))
-    dist.update()
-
-    gaussian_idx, sample[0] = dist.sample_reuse(sample[0], active)
-
-    gaussian = dr.gather(mi.ArrayXf, tgmm_table, gaussian_idx, active, shape=(NB_GAUSSIAN_PARAMS, 1))
-    return sample_gaussian(sample, gaussian, sun_phi)

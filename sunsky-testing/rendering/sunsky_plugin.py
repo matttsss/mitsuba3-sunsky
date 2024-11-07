@@ -1,8 +1,7 @@
 import drjit as dr
 import mitsuba as mi
 
-from .sunsky_data import (get_params, get_tgmm_table, GAUSSIAN_WEIGHT_IDX,
-                          NB_GAUSSIAN_PARAMS, sample_gaussian, tgmm_pdf, tgmm_pdf_full)
+from .sunsky_data import get_params, get_tgmm_table, NB_GAUSSIAN_PARAMS, sample_gaussian, tgmm_pdf
 
 SIN_OFFSET = 0.01
 
@@ -79,24 +78,15 @@ class SunskyEmitter(mi.Emitter):
 
         # Get sampling parameters
         _, tgmm_tables = mi.array_from_file_f("sunsky-testing/res/datasets/tgmm_tables.bin")
-        self.tgmm_params = get_tgmm_table(tgmm_tables, turb, sun_eta)
-        lf = self.tgmm_params[0]
-        lerp_values = [(1 - lf[0]) * (1 - lf[1]),
-                       lf[0] * (1 - lf[1]),
-                       (1 - lf[0]) * lf[1],
-                       lf[0] * lf[1]]
+        mis_weights, self.gaussians = get_tgmm_table(tgmm_tables, turb, sun_eta)
 
-        temp = [0.0] * (4 * 5)
-        for i in range(4):
-            temp_i = dr.gather(mi.Float, self.tgmm_params[1][i], GAUSSIAN_WEIGHT_IDX)
-            for j in range(5):
-                temp[i * 5 + j] = temp_i[j] * lerp_values[i]
+        dr.print(self.gaussians)
 
-        self.gaussian_dist = mi.DiscreteDistribution(dr.ravel(temp))
+        self.gaussian_dist = mi.DiscreteDistribution(mis_weights)
 
         self.m_flags = mi.EmitterFlags.Infinite | mi.EmitterFlags.SpatiallyVarying
 
-        dr.eval(self.m_params, self.m_rad, *self.tgmm_params[1], self.gaussian_dist)
+        dr.eval(self.m_params, self.m_rad, self.gaussians, self.gaussian_dist)
 
     def set_scene(self, scene):
         if scene.bbox().valid():
@@ -176,22 +166,20 @@ class SunskyEmitter(mi.Emitter):
             mi.SurfaceInteraction3f(), wavelength_sample, active)
 
         weights *= dr.maximum(self.frame.sin_theta(ray_dir), SIN_OFFSET)
-        weights /= tgmm_pdf(self.tgmm_table, v0, self.sun_phi, active)
+        weights /= tgmm_pdf(self.gaussians, v0, self.sun_phi, active)
 
         return mi.Ray3f(ray_orig, ray_dir, time, wavelengths) & active, mi.depolarizer(weights) & active
 
     def sample_direction(self, it, sample, active=True) -> (mi.DirectionSample3f, mi.Spectrum):
         glb_idx, sample[0] = self.gaussian_dist.sample_reuse(sample[0], active)
 
-        table_idx = (glb_idx // 5)[0]
-        gaussian_idx = glb_idx % 5
-        gaussian = dr.gather(mi.ArrayXf, self.tgmm_params[1][table_idx], gaussian_idx, active, shape=(NB_GAUSSIAN_PARAMS, 1))
+        gaussian = dr.gather(mi.ArrayXf, self.gaussians, glb_idx, active, shape=(NB_GAUSSIAN_PARAMS, 1))
 
         local_direction = sample_gaussian(sample, gaussian, self.sun_phi)
         direction = dr.normalize(self.to_world @ local_direction)
         sin_theta = dr.maximum(self.frame.sin_theta(direction), SIN_OFFSET)
 
-        pdf = tgmm_pdf_full(self.tgmm_params, local_direction, self.sun_phi, active) / sin_theta
+        pdf = tgmm_pdf(self.gaussians, local_direction, self.sun_phi, active) / sin_theta
 
         radius = dr.maximum(self.m_bsphere.radius, dr.norm(it.p - self.m_bsphere.center))
         dist = 2 * radius
@@ -215,7 +203,7 @@ class SunskyEmitter(mi.Emitter):
     def pdf_direction(self, it, ds, active=True):
         local_direction = dr.normalize(self.to_world.inverse() @ ds.d)
         sin_theta = self.frame.sin_theta(ds.d)
-        return tgmm_pdf_full(self.tgmm_params, local_direction, self.sun_phi, active) / (dr.maximum(sin_theta, SIN_OFFSET))
+        return tgmm_pdf(self.gaussians, local_direction, self.sun_phi, active) / (dr.maximum(sin_theta, SIN_OFFSET))
 
     def eval_direction(self, it, ds, active=True):
         si = dr.zeros(mi.SurfaceInteraction3f)

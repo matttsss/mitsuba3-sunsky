@@ -112,10 +112,10 @@ def test_chi2_emitter():
     assert test.run()
 
 def plot_pdf():
-    a, t, eta = 0.5, 7, dr.deg2rad(45.5)
+    a, t, eta = 0.5, 7.5, dr.deg2rad(45.5)
     render_shape = (512//4, 512)
 
-    phi_sun = dr.pi * 31/20
+    phi_sun = dr.pi/2
     sp, cp = dr.sincos(phi_sun)
     st, ct = dr.sincos(dr.pi/2 - eta)
 
