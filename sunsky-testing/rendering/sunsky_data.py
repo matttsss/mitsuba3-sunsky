@@ -10,17 +10,6 @@ NB_GAUSSIANS = 5
 NB_GAUSSIAN_PARAMS = 5
 GAUSSIAN_WEIGHT_IDX = NB_GAUSSIAN_PARAMS * dr.arange(mi.UInt32, NB_GAUSSIANS) + (NB_GAUSSIAN_PARAMS - 1)
 
-def get_sun(sun_dir, view_dir, sun_radii, sun_dropoff, horizon_dropoff):
-    def smoothstep(x):
-        x = dr.clip(x, 0, 1)
-        return 3 * x**2 - 2 * x**3
-
-    theta = dr.acos(mi.Frame3f(mi.Vector3f(0, 0, 1)).cos_theta(view_dir))
-    eta = dr.acos(dr.dot(sun_dir, view_dir))
-
-    return smoothstep((eta - 0.5 * sun_radii) / -sun_dropoff) * smoothstep((theta - 0.5 * dr.pi) / -horizon_dropoff)
-
-
 def bezier_interpolate(dataset: mi.Float, block_size: int, offset: mi.UInt32, x: mi.Float) -> mi.Float:
     """
      Interpolates data along a quintic Bézier curve
@@ -94,9 +83,10 @@ def get_tgmm_table(dataset: mi.Float, t: mi.Float, eta: mi.Float) -> tuple[mi.Fl
     dr.assert_true(0 <= eta <= 0.5 * dr.pi, "Sun elevation is not between 0 and %f (pi/2): %f", (dr.pi/2, eta))
     dr.assert_true(1 <= t <= NB_TURBIDITY, "Turbidity value is not between 1 and 10: %f", t)
 
+    # ==================== EXTRACT TURBIDITY AND ETA INDICES ====================
     eta = dr.rad2deg(eta)
-    eta_idx_f = dr.maximum((eta - 2) / 3, 0) # adapt to table's discretization
-    t_idx_f = dr.maximum(t - 2, 0)
+    eta_idx_f = dr.clip((eta - 2) / 3, 0, NB_ETAS - 1) # adapt to table's discretization
+    t_idx_f = dr.clip(t - 2, 0, (NB_TURBIDITY - 1) - 1)
 
     eta_idx_low = mi.UInt32(dr.floor(eta_idx_f))
     t_idx_low = mi.UInt32(dr.floor(t_idx_f))
@@ -111,7 +101,7 @@ def get_tgmm_table(dataset: mi.Float, t: mi.Float, eta: mi.Float) -> tuple[mi.Fl
     eta_block_size = t_block_size // NB_ETAS
 
 
-    # Build index range to gather the 4 tGMM distribution parameters
+    # ==================== BUILD INDICES TO EXTRACT 4 MIXTURES AT ONCE ====================
     idx_idx = dr.arange(mi.UInt32, 4 * eta_block_size)
     idx = dr.tile(dr.arange(mi.UInt32, eta_block_size), 4)
 
@@ -124,20 +114,20 @@ def get_tgmm_table(dataset: mi.Float, t: mi.Float, eta: mi.Float) -> tuple[mi.Fl
     distrib_params = dr.gather(mi.Float, dataset, idx)
 
 
-    # Apply lerp weights to the truncated gaussian weights
+    # ==================== APPLY LERP FACTOR TO CORRESPONDING GAUSSIAN WEIGHTS ====================
     is_tgaussian_weight = idx_idx % 5 == 4
     distrib_params *= dr.select(is_tgaussian_weight & is_t_low, (1 - t_rem), 1)
     distrib_params *= dr.select(is_tgaussian_weight & ~is_t_low, t_rem, 1)
     distrib_params *= dr.select(is_tgaussian_weight & is_eta_low, (1 - eta_rem), 1)
     distrib_params *= dr.select(is_tgaussian_weight & ~is_eta_low, eta_rem, 1)
 
+    # =========================== EXTRACT MIS WEIGHTS FOR SAMPLING =========================
     weight_idx = 5 * dr.arange(mi.UInt32, 4 * NB_GAUSSIAN_PARAMS) + 4
     mis_weights = dr.gather(mi.Float, distrib_params, weight_idx)
 
-    # TODO "Transfer to Array"
     return mis_weights, distrib_params
 
-def tgmm_pdf(gaussians: mi.ArrayXf, direction: mi.Vector3f, sun_phi: mi.Float = dr.pi/2, active=True) -> mi.Float:
+def tgmm_pdf(gaussians: mi.Float, direction: mi.Vector3f, sun_phi: mi.Float = dr.pi/2, active=True) -> mi.Float:
     """
     Evaluate the TGMM PDF at the given angles
     :param gaussians: gaussian parameters of shape [20, 5]
@@ -150,6 +140,7 @@ def tgmm_pdf(gaussians: mi.ArrayXf, direction: mi.Vector3f, sun_phi: mi.Float = 
     phi += dr.pi/2 - sun_phi
     phi = dr.select(phi < 0, phi + dr.two_pi, phi)
 
+    # In bounds check
     active &= (theta > 0) & (theta <= dr.pi / 2) & (phi >= 0) & (phi <= dr.two_pi)
 
     x = mi.Point2f(phi, theta)
@@ -157,6 +148,7 @@ def tgmm_pdf(gaussians: mi.ArrayXf, direction: mi.Vector3f, sun_phi: mi.Float = 
     b = mi.Point2f(dr.two_pi, dr.pi/2)
 
     pdf = mi.Float(0.0)
+    # Iterate over all 20 gaussians of the unified mixture
     for i in range(4 * NB_GAUSSIANS):
         gaussian = dr.gather(mi.ArrayXf, gaussians, i, active, shape=(NB_GAUSSIAN_PARAMS, 1))
         pdf += tgaussian_pdf(gaussian, x, a, b)
@@ -166,9 +158,19 @@ def tgmm_pdf(gaussians: mi.ArrayXf, direction: mi.Vector3f, sun_phi: mi.Float = 
 def gaussian_cdf(x, mu, sigma):
     return 0.5 * (1 + dr.erf(dr.inv_sqrt_two * (x - mu) / sigma))
 
-def tgaussian_pdf(gaussian_params: mi.TensorXf, angles: mi.Point2f, a: mi.Point2f, b: mi.Point2f) -> mi.Float:
-    mu = mi.Point2f(gaussian_params[0], gaussian_params[1])
-    sigma = mi.Point2f(gaussian_params[2], gaussian_params[3])
+def tgaussian_pdf(gaussian: mi.ArrayXf, angles: mi.Point2f, a: mi.Point2f, b: mi.Point2f) -> mi.Float:
+    """
+    Evaluates the gaussian's PDF weighted by its factor
+    :param gaussian: Gaussian parameters (mu_p, mu_t, sigma_p, sigma_t, weight)
+    :param angles: Viewing angles
+    :param a: Lower bound
+    :param b: Upper bound
+    :return: PDF value weighted by the factor
+    """
+    # (mu_p, mu_t)
+    mu = mi.Point2f(gaussian[0], gaussian[1])
+    # (sigma_p, sigma_t)
+    sigma = mi.Point2f(gaussian[2], gaussian[3])
 
     cdf_a = gaussian_cdf(a, mu, sigma)
     cdf_b = gaussian_cdf(b, mu, sigma)
@@ -177,13 +179,13 @@ def tgaussian_pdf(gaussian_params: mi.TensorXf, angles: mi.Point2f, a: mi.Point2
 
     unbounded_pdf = mi.warp.square_to_std_normal_pdf((angles - mu) / sigma)
 
-    return gaussian_params[4] * unbounded_pdf / volume
+    return gaussian[4] * unbounded_pdf / volume
 
-def sample_gaussian(sample: mi.Point2f, gaussian: mi.TensorXf, sun_phi: mi.Float = dr.pi/2) -> mi.Vector3f:
+def sample_gaussian(sample: mi.Point2f, gaussian: mi.ArrayXf, sun_phi: mi.Float = dr.pi/2) -> mi.Vector3f:
     """
-    Sample a 2D gaussian distribution
+    Sample the 2D gaussian distribution
     :param sample: 2D sample point
-    :param gaussian: Gaussian parameters (mu_p, mu_t, sigma_p, sigma_t [, weight])
+    :param gaussian: Gaussian parameters (mu_p, mu_t, sigma_p, sigma_t, weight)
     :param sun_phi: Sun azimuth angle
     :return: Sampled point
     """
@@ -198,7 +200,7 @@ def sample_gaussian(sample: mi.Point2f, gaussian: mi.TensorXf, sun_phi: mi.Float
     cdf_a = gaussian_cdf(a, mu, sigma)
     cdf_b = gaussian_cdf(b, mu, sigma)
 
-    sample = cdf_a + sample * (cdf_b - cdf_a)
+    sample = dr.fma(cdf_b - cdf_a, sample, cdf_a)
     res = dr.sqrt_two * dr.erfinv(2 * sample - 1) * sigma + mu
 
     return to_spherical(res[0] + (dr.pi/2 - sun_phi), res[1])

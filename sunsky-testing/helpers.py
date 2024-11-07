@@ -2,6 +2,7 @@ import drjit as dr
 import mitsuba as mi
 
 def to_spherical(phi: mi.Float, theta: mi.Float) -> mi.Vector3f:
+    """Returns the corresponding 3D vector in z-up standard basis"""
     sp, cp = dr.sincos(phi)
     st, ct = dr.sincos(theta)
     return mi.Vector3f(cp * st, sp * st, ct)

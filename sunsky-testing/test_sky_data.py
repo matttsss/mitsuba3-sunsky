@@ -9,7 +9,7 @@ mi.set_variant("cuda_rgb")
 
 from rendering.sunsky_plugin import SunskyEmitter
 from helpers import get_north_hemisphere_rays, get_spherical_rays
-from rendering.sunsky_data import get_tgmm_table, GAUSSIAN_WEIGHT_IDX
+from rendering.sunsky_data import get_tgmm_table, NB_GAUSSIANS, NB_GAUSSIAN_PARAMS
 
 
 def test_gmm_values():
@@ -54,38 +54,24 @@ def test_get_tgmm_table():
 
 
     # Test for T=2, eta = 2°, 2nd gaussian weights
-    table = get_tgmm_table(tgmm_tables, 2, dr.deg2rad(2))
+    mis_w, gaussians = get_tgmm_table(tgmm_tables, 2, dr.deg2rad(3.5))
 
-    expected_weights = mi.Float(0.054385298, 0.463477043, 0.057274885, 0.110654598, 0.314208176)
-    weights = dr.gather(mi.Float, table, GAUSSIAN_WEIGHT_IDX)
-    assert dr.allclose(expected_weights, weights), "Incorrect values for GGM weights (T=2, eta=2°, 2nd gaussian weights)"
+    assert len(mis_w) == 4 * NB_GAUSSIANS, "Incorrect number of weights for tGGM"
+    assert len(gaussians) == 4 * NB_GAUSSIANS * NB_GAUSSIAN_PARAMS, "Incorrect number of coefficients for tGGM"
 
-    expected = mi.Float(2.610391446, dr.pi/2 - 0.463659442, 6, 0.444768602, 0.463477043)
-    assert dr.allclose(expected, dr.gather(mi.Float, table, 1 * 5 + dr.arange(mi.UInt32, 5))), "Incorrect values for GGM (T=2, eta=2°, 2nd gaussian weights)"
+    expected_weights = mi.Float(0.054385298, 0.463477043, 0.057274885, 0.110654598, 0.314208176,
+                                0.113123341, 0.325426914, 0.428147296, 0.064280645, 0.069021805,
+                                0.0, 0.0, 0.0, 0.0, 0.0,
+                                0.0, 0.0, 0.0, 0.0, 0.0) / 2
+    assert dr.allclose(mis_w, expected_weights), "Incorrect values for GGM weights (T=2, eta=2°, 2nd gaussian weights)"
 
-    # Test for T=9, eta = 86°, 4th gaussian weights
-    table = get_tgmm_table(tgmm_tables, 9, dr.deg2rad(86))
+    expected = mi.Float(2.610391446, dr.pi/2 - 0.463659442, 6, 0.444768602, 0.463477043/2)
+    assert dr.allclose(expected, dr.gather(mi.Float, gaussians, 1 * 5 + dr.arange(mi.UInt32, 5))), "Incorrect values for GGM (T=2, eta=2°, 2nd gaussian weights)"
 
-    expected_weights = mi.Float(0.160952343, 0.31412632, 0.158529337, 0.153080459, 0.21331154)
-    weights = dr.gather(mi.Float, table, GAUSSIAN_WEIGHT_IDX)
-    assert dr.allclose(expected_weights, weights), "Incorrect values for GGM weights (T=9, eta=86°, 4nd gaussian weights)"
-
-    expected = mi.Float(0.605992344, dr.pi/2 - 0.050513378, 1.991059441, 0.256612905, 0.153080459)
-    assert dr.allclose(expected, dr.gather(mi.Float, table, 3 * 5 + dr.arange(mi.UInt32, 5))), "Incorrect values for GGM (T=9, eta=86°, 4nd gaussian weights)"
-
-    # Test for T=6, eta = 41°, 3rd gaussian weights
-    table = get_tgmm_table(tgmm_tables, 6, dr.deg2rad(41))
-    expected = mi.Float(1.565581977, dr.pi/2 - 0.627374917, 0.258039383, 0.201905279, 0.087714186)
-    assert dr.allclose(expected, dr.gather(mi.Float, table, 2 * 5 + dr.arange(mi.UInt32, 5))), "Incorrect values for GGM (T=6, eta=41°, 3rd gaussian weights)"
-
-    # Test for T=7, eta = 50°, 5th gaussian weights
-    table = get_tgmm_table(tgmm_tables, 7, dr.deg2rad(50))
-    expected = mi.Float(1.573958981, dr.pi/2 - 0.171513533, 0.53386282, 0.474166945, 0.154709808)
-    assert dr.allclose(expected, dr.gather(mi.Float, table, 4 * 5 + dr.arange(mi.UInt32, 5))), "Incorrect values for GGM (T=7, eta=50°, 5th gaussian weights)"
 
 def test_chi2_emitter():
-    t, a = 7, 0.5
-    eta = dr.deg2rad(45)
+    t, a = 6.1, 0.5
+    eta = dr.deg2rad(54.3)
     phi_sun = dr.pi/2
 
     sp_sun, cp_sun = dr.sincos(phi_sun)
@@ -105,15 +91,14 @@ def test_chi2_emitter():
         pdf_func= pdf_func,
         sample_func= sample_func,
         sample_dim=2,
-        sample_count= 200_000_000,
-        res=501
+        ires=32
     )
 
     assert test.run()
 
 def plot_pdf():
-    a, t, eta = 0.5, 7.5, dr.deg2rad(45.5)
-    render_shape = (512//4, 512)
+    a, t, eta = 0.5, 6.1, dr.deg2rad(54.3)
+    render_shape = (1024//4, 1024)
 
     phi_sun = dr.pi/2
     sp, cp = dr.sincos(phi_sun)
@@ -133,9 +118,10 @@ def plot_pdf():
     hemisphere_dir, (_, thetas) = get_north_hemisphere_rays(render_shape, True)
 
     # ================ Colored -> PDF ==================
-    si.wi = -get_spherical_rays(render_shape)
+    temp_shape = (render_shape[0] * 2, render_shape[1])
+    si.wi = -get_spherical_rays(temp_shape)
 
-    color_render = dr.reshape(mi.TensorXf, sky.eval(si), (*render_shape, 3))
+    color_render = dr.reshape(mi.TensorXf, sky.eval(si), (*temp_shape, 3))
 
     envmap = mi.load_dict({
         "type": "envmap",
@@ -160,15 +146,15 @@ def plot_pdf():
     fig, axes = plt.subplots(ncols=2, nrows=2)
 
     vmax = dr.ravel(dr.max(pdf_ref))[0]
-    axes[0][0].imshow(pdf_ref, vmin=0, vmax=vmax)
+    axes[0][0].imshow(pdf_ref, vmin=0, vmax=vmax, interpolation="nearest")
     axes[0][0].axis('off')
     axes[0][0].set_title("Bitmap PDF")
 
-    axes[0][1].imshow(pdf_render, vmin=0, vmax=vmax)
+    axes[0][1].imshow(pdf_render, vmin=0, vmax=vmax, interpolation="nearest")
     axes[0][1].axis('off')
     axes[0][1].set_title("tGMM PDF")
 
-    axes[1][0].imshow(relative_error, vmin=0, vmax=1)
+    axes[1][0].imshow(relative_error, interpolation="nearest")
     axes[1][0].axis('off')
     axes[1][0].set_title("Relative error")
 
@@ -329,13 +315,13 @@ def test_plot_spectral():
 if __name__ == "__main__":
     #mi.write_sky_model_data_v2("sunsky-testing/res/datasets/ssm_dataset")
 
-    #test_gmm_values()
-    #test_get_tgmm_table()
+    test_gmm_values()
+    test_get_tgmm_table()
     test_mean_radiance_data()
     test_radiance_data()
 
     plot_pdf()
     test_chi2_emitter()
 
-    #test_plot_spectral() FIXME solve std::bad_cast error
+    #test_plot_spectral()
     #render_suite()
