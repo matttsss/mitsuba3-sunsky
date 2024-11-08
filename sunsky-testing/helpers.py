@@ -9,7 +9,7 @@ def to_spherical(phi: mi.Float, theta: mi.Float) -> mi.Vector3f:
 
 def from_spherical(v: mi.Vector3f) -> mi.Vector2f:
     """Returns (phi, theta)"""
-    return mi.Vector2f(dr.atan2(v[1], v[0]), dr.acos(v[2]))
+    return mi.Vector2f(dr.atan2(v[1], v[0]), dr.safe_acos(v[2]))
 
 
 def get_north_hemisphere_rays(resolution, ret_angles = False):

@@ -141,16 +141,20 @@ class SunskyEmitter(mi.Emitter):
                                  self.render_channel(dr.minimum(idx + 1, 10), cos_theta, cos_gamma, mask),
                                  lerp_factor[i])
 
-        return res
+        return res & active
 
 
     def sample_direction(self, it, sample, active=True) -> (mi.DirectionSample3f, mi.Spectrum):
+
+        # Sample a gaussian
         glb_idx, sample[0] = self.gaussian_dist.sample_reuse(sample[0], active)
-
         gaussian = dr.gather(mi.ArrayXf, self.gaussians, glb_idx, active, shape=(NB_GAUSSIAN_PARAMS, 1))
-
         local_direction = sample_gaussian(sample, gaussian, self.sun_phi)
-        pdf = tgmm_pdf(self.gaussians, local_direction, self.sun_phi, active) * inv_sin_theta(local_direction)
+
+        # Get PDF
+        inv_st = inv_sin_theta(local_direction)
+        pdf = tgmm_pdf(self.gaussians, local_direction, self.sun_phi, active) * inv_st
+        active &= pdf > 0
 
         radius = dr.maximum(self.m_bsphere.radius, dr.norm(it.p - self.m_bsphere.center))
         dist = 2 * radius
@@ -161,7 +165,7 @@ class SunskyEmitter(mi.Emitter):
             n=-direction,
             uv=sample,
             time=it.time,
-            pdf=pdf,
+            pdf=pdf & active,
             delta=mi.Bool(False),
             d=direction,
             dist=dist,
@@ -174,7 +178,9 @@ class SunskyEmitter(mi.Emitter):
 
     def pdf_direction(self, it, ds, active=True):
         local_direction = dr.normalize(self.to_world.inverse() @ ds.d)
-        return tgmm_pdf(self.gaussians, local_direction, self.sun_phi, active) * inv_sin_theta(local_direction)
+        inv_st = inv_sin_theta(local_direction)
+
+        return tgmm_pdf(self.gaussians, local_direction, self.sun_phi, active) * inv_st
 
     def is_environment(self):
         return True

@@ -8,7 +8,6 @@ NB_CTRL_PTS = 6
 NB_ETAS = 30
 NB_GAUSSIANS = 5
 NB_GAUSSIAN_PARAMS = 5
-GAUSSIAN_WEIGHT_IDX = NB_GAUSSIAN_PARAMS * dr.arange(mi.UInt32, NB_GAUSSIANS) + (NB_GAUSSIAN_PARAMS - 1)
 
 def bezier_interpolate(dataset: mi.Float, block_size: int, offset: mi.UInt32, x: mi.Float) -> mi.Float:
     """
@@ -108,7 +107,7 @@ def get_tgmm_table(dataset: mi.Float, t: mi.Float, eta: mi.Float) -> tuple[mi.Fl
     is_t_low = idx_idx < 2 * eta_block_size
     idx += t_block_size * dr.select(is_t_low, t_idx_low, t_idx_high)
 
-    is_eta_low = (idx_idx < eta_block_size) | (idx_idx >= 3 * eta_block_size)
+    is_eta_low = (idx_idx < eta_block_size) | ((idx_idx >= 2 * eta_block_size) & (idx_idx < 3 * eta_block_size))
     idx += eta_block_size * dr.select(is_eta_low, eta_idx_low, eta_idx_high)
 
     distrib_params = dr.gather(mi.Float, dataset, idx)
@@ -141,7 +140,7 @@ def tgmm_pdf(gaussians: mi.Float, direction: mi.Vector3f, sun_phi: mi.Float = dr
     phi = dr.select(phi < 0, phi + dr.two_pi, phi)
 
     # In bounds check
-    active &= (theta > 0) & (theta <= dr.pi / 2) & (phi >= 0) & (phi <= dr.two_pi)
+    active &= (theta > 0) & (theta <= dr.pi / 2)
 
     x = mi.Point2f(phi, theta)
     a = mi.Point2f(0.0, 0.0)
@@ -151,35 +150,26 @@ def tgmm_pdf(gaussians: mi.Float, direction: mi.Vector3f, sun_phi: mi.Float = dr
     # Iterate over all 20 gaussians of the unified mixture
     for i in range(4 * NB_GAUSSIANS):
         gaussian = dr.gather(mi.ArrayXf, gaussians, i, active, shape=(NB_GAUSSIAN_PARAMS, 1))
-        pdf += tgaussian_pdf(gaussian, x, a, b)
+
+        # (mu_p, mu_t)
+        mu = mi.Point2f(gaussian[0], gaussian[1])
+        # (sigma_p, sigma_t)
+        sigma = mi.Point2f(gaussian[2], gaussian[3])
+
+        cdf_a = gaussian_cdf(a, mu, sigma)
+        cdf_b = gaussian_cdf(b, mu, sigma)
+
+        volume = (cdf_b[0] - cdf_a[0]) * (cdf_b[1] - cdf_a[1]) * (sigma[0] * sigma[1])
+
+        unbounded_pdf = mi.warp.square_to_std_normal_pdf((x - mu) / sigma)
+
+        pdf += gaussian[4] * unbounded_pdf / volume
 
     return pdf & active
 
 def gaussian_cdf(x, mu, sigma):
     return 0.5 * (1 + dr.erf(dr.inv_sqrt_two * (x - mu) / sigma))
 
-def tgaussian_pdf(gaussian: mi.ArrayXf, angles: mi.Point2f, a: mi.Point2f, b: mi.Point2f) -> mi.Float:
-    """
-    Evaluates the gaussian's PDF weighted by its factor
-    :param gaussian: Gaussian parameters (mu_p, mu_t, sigma_p, sigma_t, weight)
-    :param angles: Viewing angles
-    :param a: Lower bound
-    :param b: Upper bound
-    :return: PDF value weighted by the factor
-    """
-    # (mu_p, mu_t)
-    mu = mi.Point2f(gaussian[0], gaussian[1])
-    # (sigma_p, sigma_t)
-    sigma = mi.Point2f(gaussian[2], gaussian[3])
-
-    cdf_a = gaussian_cdf(a, mu, sigma)
-    cdf_b = gaussian_cdf(b, mu, sigma)
-
-    volume = (cdf_b[0] - cdf_a[0]) * (cdf_b[1] - cdf_a[1]) * (sigma[0] * sigma[1])
-
-    unbounded_pdf = mi.warp.square_to_std_normal_pdf((angles - mu) / sigma)
-
-    return gaussian[4] * unbounded_pdf / volume
 
 def sample_gaussian(sample: mi.Point2f, gaussian: mi.ArrayXf, sun_phi: mi.Float = dr.pi/2) -> mi.Vector3f:
     """
