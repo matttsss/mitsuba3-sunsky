@@ -114,7 +114,7 @@ def get_tgmm_table(dataset: mi.Float, t: mi.Float, eta: mi.Float) -> tuple[mi.Fl
 
 
     # ==================== APPLY LERP FACTOR TO CORRESPONDING GAUSSIAN WEIGHTS ====================
-    is_tgaussian_weight = idx_idx % 5 == 4
+    is_tgaussian_weight = idx_idx % NB_GAUSSIAN_PARAMS == 4
     distrib_params *= dr.select(is_tgaussian_weight & is_t_low, (1 - t_rem), 1)
     distrib_params *= dr.select(is_tgaussian_weight & ~is_t_low, t_rem, 1)
     distrib_params *= dr.select(is_tgaussian_weight & is_eta_low, (1 - eta_rem), 1)

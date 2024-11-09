@@ -155,7 +155,7 @@ def plot_pdf():
     axes[0][1].axis('off')
     axes[0][1].set_title("tGMM PDF")
 
-    axes[1][0].imshow(relative_error, interpolation="nearest")
+    axes[1][0].imshow(relative_error, vmin=0, vmax=1, interpolation="nearest")
     axes[1][0].axis('off')
     axes[1][0].set_title("Relative error")
 
