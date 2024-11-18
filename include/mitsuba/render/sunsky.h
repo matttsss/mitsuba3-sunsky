@@ -239,7 +239,7 @@ NAMESPACE_BEGIN(mitsuba)
 
     template<typename Float>
     auto array_from_file_d(const std::string &path) {
-        using FloatStorage  = DynamicBuffer<Float>;
+        using FloatStorage  = dr::DynamicArray<Float>;
         using DoubleStorage = dr::float64_array_t<FloatStorage>;
 
         FileStream file(path, FileStream::EMode::ERead);

@@ -63,40 +63,34 @@ public:
     MI_IMPORT_BASE(Emitter, m_flags, m_to_world)
     MI_IMPORT_TYPES(Scene, Shape, Texture)
 
-    static constexpr size_t NB_CHANNELS = is_spectral_v<Spectrum> ? 11 : 3;
-    static constexpr size_t WAVELENGTH_STEP = 40;
-    static constexpr size_t WAVELENGTHS[11] = {
-        320, 360, 400, 420, 460, 520, 560, 600, 640, 680, 720
-    };
-
-    using RadianceArray = dr::Array<Float,
-        NB_ALBEDO * NB_TURBIDITY * NB_CTRL_PTS * NB_CHANNELS>;
-
-    using ParamArray = dr::Array<Float,
-        NB_ALBEDO * NB_TURBIDITY * NB_CTRL_PTS * NB_CHANNELS * NB_PARAMS>;
-
+    template<size_t N>
+    using FloatArray = dr::Array<Float, N>;
+    using DynamicArray = dr::DynamicArray<Float>;
 
     SunskyEmitter(const Properties &props) : Base(props) {
         /* Until `set_scene` is called, we have no information
            about the scene and default to the unit bounding sphere. */
         m_bsphere = BoundingSphere3f(ScalarPoint3f(0.f), 1.f);
-        m_surface_area = 4.f * dr::Pi<ScalarFloat>;
+        m_surface_area = 4.f * dr::Pi<Float>;
 
-        ScalarFloat turbidity = props.get("turbidity", 3.f);
+        Float turbidity = props.get<Float>("turbidity", 3.f);
 
         ref<Texture> albedo = props.texture<Texture>("albedo", 1.f);
         if (albedo->is_spatially_varying())
             Throw("Expected a non-spatially varying radiance spectra!");
 
+        // EXTRACT ALBEDO PER WAVELENGTH / COLOR CHANEL
         SurfaceInteraction3f si;
-        dr::Array<Float, NB_CHANNELS> albedo_buff;
+        DynamicArray albedo_buff = dr::zeros<DynamicArray>(NB_CHANNELS);
         if constexpr (is_spectral_v<Spectrum>) {
             for (size_t i = 0; i < NB_CHANNELS; ++i) {
                 si.wavelengths = Wavelength(WAVELENGTHS[i]);
                 albedo_buff[i] = albedo->eval_1(si);
             }
         } else {
-            albedo_buff = dr::Array<Float, NB_CHANNELS>(albedo->eval(si));
+            Color3f temp = albedo->eval(si);
+            for (size_t i = 0; i < NB_CHANNELS; ++i)
+                albedo_buff[i] = temp[i];
         }
 
         Vector3f sun_dir = dr::normalize(
@@ -107,11 +101,13 @@ public:
         angles.x() = dr::select(dr::sin(angles.x()) < 0, dr::TwoPi<Float> - angles.x(), angles.x());
 
         Float sun_eta = 0.5f * dr::Pi<Float> - angles.y();
-        auto [unused1, database] =
+        auto [unused1, dataset] =
             array_from_file_d<Float>(DATABASE_PATH + DATASET_NAME + ".bin");
-        auto [unused2, rad_database] =
+        auto [unused2, rad_dataset] =
             array_from_file_d<Float>(DATABASE_PATH + DATASET_NAME + "_rad.bin");
-        // TODO get params
+
+        m_params = getRadianceParams<DATASET_SIZE>(dataset, albedo_buff, turbidity, sun_eta);
+        m_radiance = getRadianceParams<RAD_DATASET_SIZE>(rad_dataset, albedo_buff, turbidity, sun_eta);
 
 
         auto [unused3, tgmm_tables] =
@@ -123,7 +119,7 @@ public:
 
     void traverse(TraversalCallback *callback) override {
         Base::traverse(callback);
-        callback->put_object("radiance", m_radiance.get(), +ParamFlags::Differentiable);
+        callback->put_object("radiance", m_temp_rad.get(), +ParamFlags::Differentiable);
     }
 
     void set_scene(const Scene *scene) override {
@@ -147,7 +143,7 @@ public:
     Spectrum eval(const SurfaceInteraction3f &si, Mask active) const override {
         MI_MASKED_FUNCTION(ProfilerPhase::EndpointEvaluate, active);
 
-        return depolarizer<Spectrum>(m_radiance->eval(si, active));
+        return depolarizer<Spectrum>(m_temp_rad->eval(si, active));
     }
 
     std::pair<Ray3f, Spectrum> sample_ray(Float time, Float wavelength_sample,
@@ -200,7 +196,7 @@ public:
 
         return {
             ds,
-            depolarizer<Spectrum>(m_radiance->eval(si, active)) / ds.pdf
+            depolarizer<Spectrum>(m_temp_rad->eval(si, active)) / ds.pdf
         };
     }
 
@@ -215,13 +211,13 @@ public:
                             Mask active) const override {
         SurfaceInteraction3f si = dr::zeros<SurfaceInteraction3f>();
         si.wavelengths = it.wavelengths;
-        return depolarizer<Spectrum>(m_radiance->eval(si, active));
+        return depolarizer<Spectrum>(m_temp_rad->eval(si, active));
     }
 
     std::pair<Wavelength, Spectrum>
     sample_wavelengths(const SurfaceInteraction3f &si, Float sample,
                        Mask active) const override {
-        return m_radiance->sample_spectrum(
+        return m_temp_rad->sample_spectrum(
             si, math::sample_shifted<Wavelength>(sample), active);
     }
 
@@ -246,7 +242,7 @@ public:
     std::string to_string() const override {
         std::ostringstream oss;
         oss << "SunskyEmitter[" << std::endl
-            << "  radiance = " << string::indent(m_radiance) << "," << std::endl
+            << "  radiance = " << string::indent(m_temp_rad) << "," << std::endl
             << "  bsphere = " << string::indent(m_bsphere) << std::endl
             << "]";
         return oss.str();
@@ -256,7 +252,7 @@ public:
     MI_DECLARE_CLASS()
 protected:
 
-    ref<Texture> m_radiance;
+    ref<Texture> m_temp_rad;
     BoundingSphere3f m_bsphere;
 
     /// Surface area of the bounding sphere
@@ -268,6 +264,86 @@ protected:
         "ssm_dataset_v2_rgb";
 
 private:
+
+    static constexpr size_t NB_CHANNELS = is_spectral_v<Spectrum> ? 11 : 3,
+                            DATASET_SIZE = NB_TURBIDITY * NB_ALBEDO * NB_CTRL_PTS * NB_CHANNELS * NB_PARAMS,
+                            RAD_DATASET_SIZE = NB_TURBIDITY * NB_ALBEDO * NB_CTRL_PTS * NB_CHANNELS,
+                            WAVELENGTH_STEP = 40;
+
+    FloatArray<NB_CHANNELS> m_radiance;
+    FloatArray<NB_CHANNELS * NB_PARAMS> m_params;
+
+
+    static constexpr size_t WAVELENGTHS[11] = {
+        320, 360, 400, 420, 460, 520, 560, 600, 640, 680, 720
+    };
+
+    template<typename OutArray>
+    OutArray bezierInterpolate(const DynamicArray& dataset,
+        const UInt32& offset, const Float& x) {
+
+        ScalarFloat coefs[NB_CTRL_PTS] = {1, 5, 10, 10, 5, 1};
+        //UInt32 indices = offset + dr::arange<UInt32>(OutArray::Size);
+
+        OutArray res = dr::zeros<OutArray>();
+        for (size_t i = 0; i < NB_CTRL_PTS; ++i) {
+            // FIXME use gather to avoid second loop
+            //OutArray data = dr::gather<OutArray>(dataset, indices + i * OutArray::Size);
+            //res += coefs[i] * data * dr::pow(1 - x, 5 - i) * dr::pow(x, i);
+            for (size_t j = 0; j < OutArray::Size; ++j) {
+                // FIXME use offset to get right index
+                //res[j] += coefs[i] * dataset[offset + i * OutArray::Size + j] * dr::pow(1 - x, 5 - i) * dr::pow(x, i);
+                res[j] += coefs[i] * dataset[0 + i * OutArray::Size + j] * dr::pow(1 - x, 5 - i) * dr::pow(x, i);
+            }
+        }
+
+        return res;
+    }
+
+    template<size_t datasetSize>
+    auto getRadianceParams(const DynamicArray& dataset,
+        DynamicArray albedo, Float turbidity, Float eta) {
+
+        turbidity = dr::clip(turbidity, 1.f, 10.f);
+        albedo = dr::clip(albedo, 0.f, 1.f);
+
+        eta = dr::clip(eta, 0.f, 0.5f * dr::Pi<Float>);
+        Float x = dr::pow(2 * dr::InvPi<Float> * eta, 1.f/3.f);
+
+        UInt32 t_int = dr::floor2int<UInt32>(turbidity),
+               t_low = dr::maximum(t_int - 1, 0),
+               t_high = dr::maximum(t_int - 1, 0);
+
+        Float t_rem = turbidity - t_int;
+
+        constexpr size_t tBlockSize = datasetSize / NB_TURBIDITY,
+                         aBlockSize = tBlockSize / NB_ALBEDO,
+                         ctrlBlockSize = aBlockSize / NB_CTRL_PTS,
+                         innerBlockSize = ctrlBlockSize / NB_CHANNELS;
+
+        using OutArray = FloatArray<ctrlBlockSize>;
+
+        OutArray resALow = dr::lerp(
+                    bezierInterpolate<OutArray>(dataset,
+                        t_low * tBlockSize + 0 * aBlockSize, x),
+                    bezierInterpolate<OutArray>(dataset,
+                        t_high * tBlockSize + 0 * aBlockSize, x), t_rem);
+
+        OutArray resAHigh = dr::lerp(
+                    bezierInterpolate<OutArray>(dataset,
+                        t_low * tBlockSize + 1 * aBlockSize, x),
+                    bezierInterpolate<OutArray>(dataset,
+                        t_high * tBlockSize + 1 * aBlockSize, x), t_rem);
+
+        // FIXME manage to repeat the albedo array
+        //OutArray res = dr::lerp(resALow, resAHigh, dr::repeat(albedo, innerBlockSize));
+        OutArray res = dr::lerp(resALow, resAHigh, 0.5f);
+
+        return res; // & (1 <= turbidity) & (turbidity <= 10) &
+                     //(0 <= albedo) & (albedo <= 1) &
+                     // (0 <= eta) & (eta <= 0.5f * dr::Pi<Float>);
+    }
+
     Point2f from_spherical(const Vector3f& v) const {
         return Point2f(
             dr::safe_sqrt(dr::atan2(v.y(), v.x())),
