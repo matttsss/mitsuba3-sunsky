@@ -1,6 +1,5 @@
 #include <mitsuba/core/bsphere.h>
 #include <mitsuba/core/fresolver.h>
-#include <mitsuba/core/plugin.h>
 #include <mitsuba/core/properties.h>
 #include <mitsuba/core/warp.h>
 #include <mitsuba/render/emitter.h>
@@ -63,9 +62,9 @@ public:
     MI_IMPORT_BASE(Emitter, m_flags, m_to_world)
     MI_IMPORT_TYPES(Scene, Shape, Texture)
 
-    template<size_t N>
-    using FloatArray = dr::Array<Float, N>;
-    using DynamicArray = dr::DynamicArray<Float>;
+    using FloatStorage = DynamicBuffer<Float>;
+    using SpecUInt32 = dr::uint32_array_t<Spectrum>;
+    using SpecMask = dr::mask_t<Spectrum>;
 
     SunskyEmitter(const Properties &props) : Base(props) {
         /* Until `set_scene` is called, we have no information
@@ -73,47 +72,46 @@ public:
         m_bsphere = BoundingSphere3f(ScalarPoint3f(0.f), 1.f);
         m_surface_area = 4.f * dr::Pi<Float>;
 
-        Float turbidity = props.get<Float>("turbidity", 3.f);
+        // ================ GET TURBIDITY ===============
+        ScalarFloat turbidity = props.get<ScalarFloat>("turbidity", 3.f);
 
+        // ================= GET ALBEDO =================
         ref<Texture> albedo = props.texture<Texture>("albedo", 1.f);
         if (albedo->is_spatially_varying())
             Throw("Expected a non-spatially varying radiance spectra!");
 
-        // EXTRACT ALBEDO PER WAVELENGTH / COLOR CHANEL
-        SurfaceInteraction3f si;
-        DynamicArray albedo_buff = dr::zeros<DynamicArray>(NB_CHANNELS);
-        if constexpr (is_spectral_v<Spectrum>) {
-            for (size_t i = 0; i < NB_CHANNELS; ++i) {
-                si.wavelengths = Wavelength(WAVELENGTHS[i]);
-                albedo_buff[i] = albedo->eval_1(si);
-            }
-        } else {
-            Color3f temp = albedo->eval(si);
-            for (size_t i = 0; i < NB_CHANNELS; ++i)
-                albedo_buff[i] = temp[i];
-        }
+        dr::eval(albedo);
+        std::array<ScalarFloat, NB_CHANNELS> albedo_buff = extractAlbedo(albedo);
 
-        Vector3f sun_dir = dr::normalize(
-            m_to_world.value().inverse()
-            .transform_affine(props.get<Vector3f>("sun_direction")));
+        // ================= GET ANGLES =================
+        ScalarVector3f sun_dir = dr::normalize(
+            m_to_world.scalar().inverse()
+            .transform_affine(props.get<ScalarVector3f>("sun_direction")));
 
-        Point2f angles = from_spherical(sun_dir);
+        ScalarPoint2f angles = from_scalar_spherical(sun_dir);
         angles.x() = dr::select(dr::sin(angles.x()) < 0, dr::TwoPi<Float> - angles.x(), angles.x());
 
-        Float sun_eta = 0.5f * dr::Pi<Float> - angles.y();
-        auto [unused1, dataset] =
-            array_from_file_d<Float>(DATABASE_PATH + DATASET_NAME + ".bin");
-        auto [unused2, rad_dataset] =
-            array_from_file_d<Float>(DATABASE_PATH + DATASET_NAME + "_rad.bin");
+        ScalarFloat sun_eta = 0.5f * dr::Pi<ScalarFloat> - angles.y();
 
-        m_params = getRadianceParams<DATASET_SIZE>(dataset, albedo_buff, turbidity, sun_eta);
-        m_radiance = getRadianceParams<RAD_DATASET_SIZE>(rad_dataset, albedo_buff, turbidity, sun_eta);
+        // ================= GET RADIANCE =================
+        std::vector<ScalarFloat> dataset =
+            array_from_file<double, ScalarFloat>(DATABASE_PATH + DATASET_NAME + ".bin");
 
+        std::vector<ScalarFloat> rad_dataset =
+            array_from_file<double, ScalarFloat>(DATABASE_PATH + DATASET_NAME + "_rad.bin");
 
-        auto [unused3, tgmm_tables] =
-            array_from_file_f<Float>(DATABASE_PATH "tgmm_tables.bin");
-        // TODO get weights and table
+        std::vector<ScalarFloat>
+                params = getRadianceParams<DATASET_SIZE>(dataset, albedo_buff, turbidity, sun_eta),
+                radiance = getRadianceParams<RAD_DATASET_SIZE>(rad_dataset, albedo_buff, turbidity, sun_eta);
 
+        m_params = dr::load<FloatStorage>(params.data(), params.size());
+        m_radiance = dr::load<FloatStorage>(radiance.data(), radiance.size());
+
+        //std::vector<ScalarFloat> tgmm_tables =
+        //    array_from_file<float, ScalarFloat>(DATABASE_PATH "tgmm_tables.bin");
+
+        m_sun_dir = sun_dir;
+        dr::make_opaque(m_params, m_radiance, m_sun_dir);
         m_flags = +EmitterFlags::Infinite | +EmitterFlags::SpatiallyVarying;
     }
 
@@ -143,7 +141,33 @@ public:
     Spectrum eval(const SurfaceInteraction3f &si, Mask active) const override {
         MI_MASKED_FUNCTION(ProfilerPhase::EndpointEvaluate, active);
 
-        return depolarizer<Spectrum>(m_temp_rad->eval(si, active));
+        Vector3f local_wi = dr::normalize(m_to_world.value().inverse().transform_affine(si.wi));
+        Float cos_theta = Frame3f::cos_theta(-local_wi);
+        Float cos_gamma = dr::dot(m_sun_dir, -local_wi);
+
+        active &= cos_theta >= 0;
+
+        if constexpr (is_rgb_v<Spectrum>) {
+
+            SpecUInt32 idx = SpecUInt32({0, 1, 2});
+            // dr::width(idx) == 1
+
+            // Divide by normalisation factor
+            return renderChannels(idx, cos_theta, cos_gamma, active) / 106.856980;
+
+        } else {
+            Spectrum normalized_wavelengths = (si.wavelengths - WAVELENGTHS[0]) / WAVELENGTH_STEP;
+            SpecUInt32 query_idx = SpecUInt32(dr::floor(normalized_wavelengths));
+            Spectrum lerp_factor = normalized_wavelengths - query_idx;
+
+            SpecMask spec_mask = active & (query_idx >= 0) & (query_idx < 11);
+
+            return dr::lerp(
+                renderChannels(query_idx, cos_theta, cos_gamma, spec_mask),
+                renderChannels(dr::minimum(query_idx + 1, NB_TURBIDITY - 1), cos_theta, cos_gamma, spec_mask),
+                lerp_factor);
+
+        }
     }
 
     std::pair<Ray3f, Spectrum> sample_ray(Float time, Float wavelength_sample,
@@ -250,105 +274,165 @@ public:
 
 
     MI_DECLARE_CLASS()
-protected:
-
-    ref<Texture> m_temp_rad;
-    BoundingSphere3f m_bsphere;
-
-    /// Surface area of the bounding sphere
-    Float m_surface_area;
-    Float m_sun_phi;
+private:
 
     const std::string DATASET_NAME = is_spectral_v<Spectrum> ?
         "ssm_dataset_v2_spec" :
         "ssm_dataset_v2_rgb";
-
-private:
 
     static constexpr size_t NB_CHANNELS = is_spectral_v<Spectrum> ? 11 : 3,
                             DATASET_SIZE = NB_TURBIDITY * NB_ALBEDO * NB_CTRL_PTS * NB_CHANNELS * NB_PARAMS,
                             RAD_DATASET_SIZE = NB_TURBIDITY * NB_ALBEDO * NB_CTRL_PTS * NB_CHANNELS,
                             WAVELENGTH_STEP = 40;
 
-    FloatArray<NB_CHANNELS> m_radiance;
-    FloatArray<NB_CHANNELS * NB_PARAMS> m_params;
+    ref<Texture> m_temp_rad;
+
+    Float m_surface_area;
+    BoundingSphere3f m_bsphere;
+
+    Float m_sun_phi;
+    Vector3f m_sun_dir;
+
+    FloatStorage m_radiance;
+    FloatStorage m_params;
 
 
     static constexpr size_t WAVELENGTHS[11] = {
         320, 360, 400, 420, 460, 520, 560, 600, 640, 680, 720
     };
 
-    template<typename OutArray>
-    OutArray bezierInterpolate(const DynamicArray& dataset,
-        const UInt32& offset, const Float& x) {
 
-        ScalarFloat coefs[NB_CTRL_PTS] = {1, 5, 10, 10, 5, 1};
-        //UInt32 indices = offset + dr::arange<UInt32>(OutArray::Size);
+    auto renderChannels(const SpecUInt32& idx,
+        const Float& cos_theta, const Float& cos_gamma, SpecMask active) const {
 
-        OutArray res = dr::zeros<OutArray>();
+        Spectrum coefs[NB_PARAMS];
+        for (uint8_t i = 0; i < NB_PARAMS; ++i)
+            coefs[i] = dr::gather<Spectrum>(m_params, idx * NB_PARAMS + i, active);
+
+        Float gamma = dr::acos(cos_gamma);
+        Float cos_gamma_sqr = dr::square(cos_gamma);
+
+        Spectrum c1 = 1 + coefs[0] * dr::exp(coefs[1] / (cos_theta + 0.01));
+        Spectrum chi = (1 + cos_gamma_sqr) / dr::pow(1 + dr::square(coefs[8]) - 2 * coefs[8] * cos_gamma, 1.5);
+        Spectrum c2 = coefs[2] + coefs[3] * dr::exp(coefs[4] * gamma) + coefs[5] * cos_gamma_sqr + coefs[6] * chi + coefs[7] * dr::safe_sqrt(cos_theta);
+
+        return c1 * c2 * dr::gather<Spectrum>(m_radiance, idx, active);
+    }
+
+    std::vector<ScalarFloat> bezierInterpolate(
+        const std::vector<ScalarFloat>& dataset, size_t outSize,
+        const ScalarUInt32& offset, const ScalarFloat& x) const {
+
+        constexpr ScalarFloat coefs[NB_CTRL_PTS] =
+            {1, 5, 10, 10, 5, 1};
+
+        std::vector<ScalarFloat> res(outSize, 0.0f);
         for (size_t i = 0; i < NB_CTRL_PTS; ++i) {
-            // FIXME use gather to avoid second loop
-            //OutArray data = dr::gather<OutArray>(dataset, indices + i * OutArray::Size);
-            //res += coefs[i] * data * dr::pow(1 - x, 5 - i) * dr::pow(x, i);
-            for (size_t j = 0; j < OutArray::Size; ++j) {
-                // FIXME use offset to get right index
-                //res[j] += coefs[i] * dataset[offset + i * OutArray::Size + j] * dr::pow(1 - x, 5 - i) * dr::pow(x, i);
-                res[j] += coefs[i] * dataset[0 + i * OutArray::Size + j] * dr::pow(1 - x, 5 - i) * dr::pow(x, i);
-            }
+            ScalarFloat coef = coefs[i] * dr::pow(1 - x, 5 - i) * dr::pow(x, i);
+            ScalarUInt32 index = offset + i * outSize;
+            for (size_t j = 0; j < outSize; ++j)
+                res[j] += coef * dataset[index + j];
         }
 
         return res;
     }
 
+    static std::vector<ScalarFloat> lerp_vectors(const std::vector<ScalarFloat>& a, const std::vector<ScalarFloat>& b, const ScalarFloat& t) {
+        assert(a.size() == b.size());
+
+        std::vector<ScalarFloat> res(a.size());
+        for (size_t i = 0; i < a.size(); ++i)
+            res[i] = dr::lerp(a[i], b[i], t);
+
+        return res;
+    }
+
     template<size_t datasetSize>
-    auto getRadianceParams(const DynamicArray& dataset,
-        DynamicArray albedo, Float turbidity, Float eta) {
+    std::vector<ScalarFloat> getRadianceParams(
+        const std::vector<ScalarFloat>& dataset,
+        const std::array<ScalarFloat, NB_CHANNELS>& albedo,
+        ScalarFloat turbidity, ScalarFloat eta) const {
 
-        turbidity = dr::clip(turbidity, 1.f, 10.f);
-        albedo = dr::clip(albedo, 0.f, 1.f);
+        turbidity = dr::clip(turbidity, 1.f, NB_TURBIDITY);
+        eta = dr::clip(eta, 0.f, 0.5f * dr::Pi<ScalarFloat>);
 
-        eta = dr::clip(eta, 0.f, 0.5f * dr::Pi<Float>);
-        Float x = dr::pow(2 * dr::InvPi<Float> * eta, 1.f/3.f);
+        ScalarFloat x = dr::pow(2 * dr::InvPi<ScalarFloat> * eta, 1.f/3.f);
 
-        UInt32 t_int = dr::floor2int<UInt32>(turbidity),
+        ScalarUInt32 t_int = dr::floor2int<ScalarUInt32>(turbidity),
                t_low = dr::maximum(t_int - 1, 0),
-               t_high = dr::maximum(t_int - 1, 0);
+               t_high = dr::minimum(t_int, NB_TURBIDITY - 1);
 
-        Float t_rem = turbidity - t_int;
+        ScalarFloat t_rem = turbidity - t_int;
 
         constexpr size_t tBlockSize = datasetSize / NB_TURBIDITY,
                          aBlockSize = tBlockSize / NB_ALBEDO,
                          ctrlBlockSize = aBlockSize / NB_CTRL_PTS,
                          innerBlockSize = ctrlBlockSize / NB_CHANNELS;
 
-        using OutArray = FloatArray<ctrlBlockSize>;
+        std::vector<ScalarFloat>
+            t_low_a_low = bezierInterpolate(dataset, ctrlBlockSize, t_low * tBlockSize + 0 * aBlockSize, x),
+            t_high_a_low = bezierInterpolate(dataset, ctrlBlockSize, t_high * tBlockSize + 0 * aBlockSize, x),
+            t_low_a_high = bezierInterpolate(dataset, ctrlBlockSize, t_low * tBlockSize + 1 * aBlockSize, x),
+            t_high_a_high = bezierInterpolate(dataset, ctrlBlockSize, t_high * tBlockSize + 1 * aBlockSize, x);
 
-        OutArray resALow = dr::lerp(
-                    bezierInterpolate<OutArray>(dataset,
-                        t_low * tBlockSize + 0 * aBlockSize, x),
-                    bezierInterpolate<OutArray>(dataset,
-                        t_high * tBlockSize + 0 * aBlockSize, x), t_rem);
+        std::vector<ScalarFloat>
+            res_a_low = lerp_vectors(t_low_a_low, t_high_a_low, t_rem),
+            res_a_high = lerp_vectors(t_low_a_high, t_high_a_high, t_rem);
 
-        OutArray resAHigh = dr::lerp(
-                    bezierInterpolate<OutArray>(dataset,
-                        t_low * tBlockSize + 1 * aBlockSize, x),
-                    bezierInterpolate<OutArray>(dataset,
-                        t_high * tBlockSize + 1 * aBlockSize, x), t_rem);
+        std::vector<ScalarFloat> res(ctrlBlockSize);
+        for (size_t i = 0; i < ctrlBlockSize; ++i)
+            res[i] = dr::lerp(res_a_low[i], res_a_high[i], albedo[i/innerBlockSize]);
 
-        // FIXME manage to repeat the albedo array
-        //OutArray res = dr::lerp(resALow, resAHigh, dr::repeat(albedo, innerBlockSize));
-        OutArray res = dr::lerp(resALow, resAHigh, 0.5f);
-
-        return res; // & (1 <= turbidity) & (turbidity <= 10) &
-                     //(0 <= albedo) & (albedo <= 1) &
-                     // (0 <= eta) & (eta <= 0.5f * dr::Pi<Float>);
+        return res;
     }
 
-    Point2f from_spherical(const Vector3f& v) const {
-        return Point2f(
+    static auto extractAlbedo(const ref<Texture>& albedo) {
+        std::array<ScalarFloat, NB_CHANNELS> albedo_buff = {};
+        SurfaceInteraction3f si = dr::zeros<SurfaceInteraction3f>();
+        if constexpr (!dr::is_array_v<Float> && is_rgb_v<Spectrum>) {
+            Color3f temp = albedo->eval(si);
+            for (size_t i = 0; i < NB_CHANNELS; ++i)
+                albedo_buff[i] = temp[i];
+
+        } else if constexpr (!dr::is_array_v<Float> && is_spectral_v<Spectrum>) {
+            for (size_t i = 0; i < NB_CHANNELS; ++i) {
+                si.wavelengths = WAVELENGTHS[i];
+                albedo_buff[i] = albedo->eval(si)[0];
+            }
+        } else if constexpr (is_rgb_v<Spectrum>) {
+            Color3f temp = albedo->eval(si);
+            for (size_t i = 0; i < NB_CHANNELS; ++i)
+                albedo_buff[i] = temp[i][0];
+            Log(Info, "Result albedo: %f", temp);
+
+
+        } else if constexpr (is_spectral_v<Spectrum>) {
+            FloatStorage wavelengths = dr::load<size_t>(WAVELENGTHS, NB_CHANNELS);
+            si.wavelengths = wavelengths;
+            Spectrum res = albedo->eval(si);
+
+            dr::eval(res);
+            Float&& temp = dr::migrate(res[0], AllocType::Host);
+            dr::sync_thread();
+
+            for (size_t i = 0; i < NB_CHANNELS; ++i)
+                albedo_buff[i] = temp[i];
+
+        } else {
+            Log(Error, "Unsupported spectrum type");
+        }
+
+        for (size_t i = 0; i < NB_CHANNELS; ++i)
+            albedo_buff[i] = dr::clip(albedo_buff[i], 0.f, 1.f);
+
+        return albedo_buff;
+    }
+
+    ScalarPoint2f from_scalar_spherical(const ScalarVector3f& v) const {
+        return {
             dr::safe_sqrt(dr::atan2(v.y(), v.x())),
             drjit::unit_angle_z(v)
-        );
+        };
     }
 };
 

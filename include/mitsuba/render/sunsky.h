@@ -284,6 +284,48 @@ NAMESPACE_BEGIN(mitsuba)
         return std::pair<std::vector<size_t>, FloatStorage>(shape, data_v);
     }
 
+    template<typename FileType, typename OutType>
+    std::vector<OutType> array_from_file(const std::string &path) {
+        FileStream file(path, FileStream::EMode::ERead);
+
+        // =============== Read headers ===============
+        char text_buff[5] = "";
+        file.read(text_buff, 3);
+        if (strcmp(text_buff, "SKY"))
+            Throw("OUPSSS wrong file");
+
+        // Read version
+        uint32_t version;
+        file.read(version);
+
+        // =============== Read tensor dimensions ===============
+        size_t nb_dims = 0;
+        file.read(nb_dims);
+
+        size_t nb_elements = 1;
+        std::vector<size_t> shape(nb_dims);
+        for (size_t dim = 0; dim < nb_dims; ++dim) {
+            file.read(shape[dim]);
+
+            if (!shape[dim])
+                Throw("Got dimension with 0 elements");
+
+            nb_elements *= shape[dim];
+        }
+
+        // ==================== Read data ====================
+        FileType* buffer = static_cast<FileType *>(
+            calloc(nb_elements, sizeof(FileType)));
+
+        file.read_array(buffer, nb_elements);
+        std::vector<FileType> data_f(buffer, buffer + nb_elements);
+
+        file.close();
+        free(buffer);
+
+        return std::vector<OutType>(data_f.begin(), data_f.end());
+    }
+
     template<typename Float>
     auto array_from_file_f(const std::string &path) {
         using FloatStorage  = DynamicBuffer<Float>;

@@ -7,8 +7,6 @@ import mitsuba as mi
 
 mi.set_variant("cuda_rgb")
 
-from rendering.sunsky_plugin import SunskyEmitter
-from rendering.spherical_sensor import SphericalSensor
 
 HALF_PI = dr.pi/2
 sun_phi = 0

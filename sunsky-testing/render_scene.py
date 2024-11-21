@@ -5,7 +5,6 @@ import drjit as dr
 import mitsuba as mi
 mi.set_variant("cuda_rgb")
 
-from rendering.sunsky_plugin import SunskyEmitter
 from rendering.spherical_sensor import SphericalSensor
 
 def render_scene(scene_name):
