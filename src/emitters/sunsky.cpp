@@ -101,17 +101,24 @@ public:
             array_from_file<double, ScalarFloat>(DATABASE_PATH + DATASET_NAME + "_rad.bin");
 
         std::vector<ScalarFloat>
-                params = getRadianceParams<DATASET_SIZE>(dataset, albedo_buff, turbidity, sun_eta),
-                radiance = getRadianceParams<RAD_DATASET_SIZE>(rad_dataset, albedo_buff, turbidity, sun_eta);
+                params = getRadianceParams(dataset, albedo_buff, turbidity, sun_eta),
+                radiance = getRadianceParams(rad_dataset, albedo_buff, turbidity, sun_eta);
 
         m_params = dr::load<FloatStorage>(params.data(), params.size());
         m_radiance = dr::load<FloatStorage>(radiance.data(), radiance.size());
 
-        //std::vector<ScalarFloat> tgmm_tables =
-        //    array_from_file<float, ScalarFloat>(DATABASE_PATH "tgmm_tables.bin");
+        std::vector<ScalarFloat> tgmm_tables =
+            array_from_file<float, ScalarFloat>(DATABASE_PATH "tgmm_tables.bin");
+
+        auto [mis_weights, distrib_params] = getTGMMTables(tgmm_tables, turbidity, sun_eta);
+
+        m_gaussians = dr::load<FloatStorage>(distrib_params.data(), distrib_params.size());
+        m_gaussian_distr = DiscreteDistribution<Float>(mis_weights.data(), mis_weights.size());
 
         m_sun_dir = sun_dir;
-        dr::make_opaque(m_params, m_radiance, m_sun_dir);
+
+        dr::make_opaque(m_params, m_radiance, m_gaussian_distr, m_gaussians, m_sun_dir);
+
         m_flags = +EmitterFlags::Infinite | +EmitterFlags::SpatiallyVarying;
     }
 
@@ -164,7 +171,7 @@ public:
 
             return dr::lerp(
                 renderChannels(query_idx, cos_theta, cos_gamma, spec_mask),
-                renderChannels(dr::minimum(query_idx + 1, NB_TURBIDITY - 1), cos_theta, cos_gamma, spec_mask),
+                renderChannels(dr::minimum(query_idx + 1, NB_CHANNELS - 1), cos_theta, cos_gamma, spec_mask),
                 lerp_factor);
 
         }
@@ -295,6 +302,9 @@ private:
 
     FloatStorage m_radiance;
     FloatStorage m_params;
+    FloatStorage m_gaussians;
+
+    DiscreteDistribution<Float> m_gaussian_distr;
 
 
     static constexpr size_t WAVELENGTHS[11] = {
@@ -302,8 +312,8 @@ private:
     };
 
 
-    auto renderChannels(const SpecUInt32& idx,
-        const Float& cos_theta, const Float& cos_gamma, SpecMask active) const {
+    Spectrum renderChannels(const SpecUInt32& idx,
+        const Float& cos_theta, const Float& cos_gamma, const SpecMask& active) const {
 
         Spectrum coefs[NB_PARAMS];
         for (uint8_t i = 0; i < NB_PARAMS; ++i)
@@ -312,11 +322,58 @@ private:
         Float gamma = dr::acos(cos_gamma);
         Float cos_gamma_sqr = dr::square(cos_gamma);
 
-        Spectrum c1 = 1 + coefs[0] * dr::exp(coefs[1] / (cos_theta + 0.01));
+        Spectrum c1 = 1 + coefs[0] * dr::exp(coefs[1] / (cos_theta + 0.01f));
         Spectrum chi = (1 + cos_gamma_sqr) / dr::pow(1 + dr::square(coefs[8]) - 2 * coefs[8] * cos_gamma, 1.5);
         Spectrum c2 = coefs[2] + coefs[3] * dr::exp(coefs[4] * gamma) + coefs[5] * cos_gamma_sqr + coefs[6] * chi + coefs[7] * dr::safe_sqrt(cos_theta);
 
         return c1 * c2 * dr::gather<Spectrum>(m_radiance, idx, active);
+    }
+
+    MI_INLINE Point2f gaussianCdf(const Point2f& mu, const Point2f& sigma, const Point2f& x) const {
+        return 0.5f * (1 + dr::erf(dr::InvSqrtTwo<Float> * (x - mu) / sigma));
+    }
+
+    Float tgmmPdf(const Vector3f& direction, Mask active) const {
+
+        Point2f angles = from_spherical(direction);
+        angles.x() += 0.5f * dr::Pi<ScalarFloat> - m_sun_phi;
+        angles.x() = dr::select(angles.x() < 0, angles.x() + dr::TwoPi<ScalarFloat>, angles.x());
+
+        active &= angles.y() >= 0 && angles.y() < 0.5f * dr::Pi<ScalarFloat>;
+
+        const Point2f a = Point2f(0.0, 0.0),
+                      b = Point2f(dr::TwoPi<Float>, 0.5f * dr::Pi<Float>);
+
+        Float pdf = 0.0;
+        for (size_t i = 0; i < 4 * NB_GAUSSIAN; ++i) {
+            size_t baseIdx = i * NB_GAUSSIAN_PARAMS;
+
+            Point2f mu = Point2f(m_gaussians[baseIdx + 0], m_gaussians[baseIdx + 1]),
+                    sigma = Point2f(m_gaussians[baseIdx + 2], m_gaussians[baseIdx + 3]);
+
+            Point2f cdf_a = gaussianCdf(mu, sigma, a),
+                    cdf_b = gaussianCdf(mu, sigma, b);
+
+            Point2f sample = (angles - mu) / sigma;
+
+            Float gaussian_pdf = warp::square_to_std_normal_pdf(sample);
+            gaussian_pdf *= m_gaussians[baseIdx + 4] / (cdf_b.x() - cdf_a.x()) * (cdf_b.y() - cdf_a.y()) * (sigma.x() * sigma.y());
+
+            pdf += gaussian_pdf;
+        }
+
+        return dr::select(active, pdf, 0.0);
+    }
+
+    Vector3f tgmmSample(const Point2f& sample, const Mask& active) {
+        UInt32 idx;
+        Point2f sample_ = sample;
+        std::tie(idx, sample_.x()) = m_gaussian_distr.sample_reuse(sample.x(), active);
+
+        const Point2f a = Point2f(0.0, 0.0),
+                      b = Point2f(dr::TwoPi<Float>, 0.5f * dr::Pi<Float>);
+
+        return {};
     }
 
     std::vector<ScalarFloat> bezierInterpolate(
@@ -347,7 +404,53 @@ private:
         return res;
     }
 
-    template<size_t datasetSize>
+    auto getTGMMTables(const std::vector<ScalarFloat>& dataset,
+                        ScalarFloat t, ScalarFloat eta) const {
+
+        eta = dr::rad_to_deg(eta);
+        ScalarFloat eta_idx_f = dr::clip((eta - 2) / 3, 0, NB_ETAS - 1),
+                    t_idx_f = dr::clip(t - 2, 0, NB_TURBIDITY - 1);
+
+        ScalarUInt32 eta_idx_low = dr::floor2int<ScalarUInt32>(eta_idx_f),
+                     t_idx_low = dr::floor2int<ScalarUInt32>(t_idx_f);
+
+        ScalarUInt32 eta_idx_high = dr::minimum(eta_idx_low + 1, NB_ETAS - 1),
+                     t_idx_high = dr::minimum(t_idx_low + 1, (NB_TURBIDITY - 1) - 1);
+
+        ScalarFloat eta_rem = eta_idx_f - eta_idx_low,
+                    t_rem = t_idx_f - t_idx_low;
+
+        const size_t tBlockSize = dataset.size() / (NB_TURBIDITY - 1),
+                     etaBlockSize = tBlockSize / NB_ETAS;
+
+        ScalarUInt64 indices[4] = {
+            t_idx_low * tBlockSize + eta_idx_low * etaBlockSize,
+            t_idx_low * tBlockSize + eta_idx_high * etaBlockSize,
+            t_idx_high * tBlockSize + eta_idx_low * etaBlockSize,
+            t_idx_high * tBlockSize + eta_idx_high * etaBlockSize
+        };
+        ScalarFloat lerpFactors[4] = {
+            t_rem * eta_rem,
+            t_rem * (1 - eta_rem),
+            (1 - t_rem) * eta_rem,
+            (1 - t_rem) * (1 - eta_rem)
+        };
+        std::vector<ScalarFloat> distribParams(4 * etaBlockSize);
+        for (size_t i = 0; i < 4; ++i) {
+            for (size_t j = 0; j < etaBlockSize; ++j) {
+                ScalarUInt32 index = i * etaBlockSize + j;
+                distribParams[index] = dataset[indices[i] + j];
+                distribParams[index] *= index % NB_GAUSSIAN_PARAMS == 4 ? lerpFactors[i] : 1;
+            }
+        }
+
+        std::vector<ScalarFloat> misWeights(4 * NB_GAUSSIAN);
+        for (size_t i = 0; i < 4 * NB_GAUSSIAN; ++i)
+            misWeights[i] = dataset[i * (4 * NB_GAUSSIAN_PARAMS) + 4];
+
+        return std::make_pair(misWeights, distribParams);
+    }
+
     std::vector<ScalarFloat> getRadianceParams(
         const std::vector<ScalarFloat>& dataset,
         const std::array<ScalarFloat, NB_CHANNELS>& albedo,
@@ -364,10 +467,10 @@ private:
 
         ScalarFloat t_rem = turbidity - t_int;
 
-        constexpr size_t tBlockSize = datasetSize / NB_TURBIDITY,
-                         aBlockSize = tBlockSize / NB_ALBEDO,
-                         ctrlBlockSize = aBlockSize / NB_CTRL_PTS,
-                         innerBlockSize = ctrlBlockSize / NB_CHANNELS;
+        const size_t tBlockSize = dataset.size() / NB_TURBIDITY,
+                     aBlockSize = tBlockSize / NB_ALBEDO,
+                     ctrlBlockSize = aBlockSize / NB_CTRL_PTS,
+                     innerBlockSize = ctrlBlockSize / NB_CHANNELS;
 
         std::vector<ScalarFloat>
             t_low_a_low = bezierInterpolate(dataset, ctrlBlockSize, t_low * tBlockSize + 0 * aBlockSize, x),
@@ -426,6 +529,13 @@ private:
             albedo_buff[i] = dr::clip(albedo_buff[i], 0.f, 1.f);
 
         return albedo_buff;
+    }
+
+    Point2f from_spherical(const Vector3f& v) const {
+        return {
+            dr::safe_sqrt(dr::atan2(v.y(), v.x())),
+            drjit::unit_angle_z(v)
+        };
     }
 
     ScalarPoint2f from_scalar_spherical(const ScalarVector3f& v) const {
