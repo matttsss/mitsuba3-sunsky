@@ -63,6 +63,7 @@ public:
     MI_IMPORT_TYPES(Scene, Shape, Texture)
 
     using FloatStorage = DynamicBuffer<Float>;
+    using Gaussian = dr::Array<Float, NB_GAUSSIAN_PARAMS>;
     using SpecUInt32 = dr::uint32_array_t<Spectrum>;
     using SpecMask = dr::mask_t<Spectrum>;
 
@@ -81,7 +82,7 @@ public:
             Throw("Expected a non-spatially varying radiance spectra!");
 
         dr::eval(albedo);
-        std::array<ScalarFloat, NB_CHANNELS> albedo_buff = extractAlbedo(albedo);
+        std::array<ScalarFloat, NB_CHANNELS> albedo_buff = extract_albedo(albedo);
 
         // ================= GET ANGLES =================
         ScalarVector3f sun_dir = dr::normalize(
@@ -94,29 +95,36 @@ public:
         ScalarFloat sun_eta = 0.5f * dr::Pi<ScalarFloat> - angles.y();
 
         // ================= GET RADIANCE =================
-        std::vector<ScalarFloat> dataset =
-            array_from_file<double, ScalarFloat>(DATABASE_PATH + DATASET_NAME + ".bin");
+        {
+            std::vector<ScalarFloat> dataset =
+                array_from_file<double, ScalarFloat>(DATABASE_PATH + DATASET_NAME + ".bin");
 
-        std::vector<ScalarFloat> rad_dataset =
-            array_from_file<double, ScalarFloat>(DATABASE_PATH + DATASET_NAME + "_rad.bin");
+            std::vector<ScalarFloat> rad_dataset =
+                array_from_file<double, ScalarFloat>(DATABASE_PATH + DATASET_NAME + "_rad.bin");
 
-        std::vector<ScalarFloat>
-                params = getRadianceParams(dataset, albedo_buff, turbidity, sun_eta),
-                radiance = getRadianceParams(rad_dataset, albedo_buff, turbidity, sun_eta);
+            std::vector<ScalarFloat>
+                    params = get_radiance_params(dataset, albedo_buff, turbidity, sun_eta),
+                    radiance = get_radiance_params(rad_dataset, albedo_buff, turbidity, sun_eta);
 
-        m_params = dr::load<FloatStorage>(params.data(), params.size());
-        m_radiance = dr::load<FloatStorage>(radiance.data(), radiance.size());
+            m_params = dr::load<FloatStorage>(params.data(), params.size());
+            m_radiance = dr::load<FloatStorage>(radiance.data(), radiance.size());
+        }
+        {
+            std::vector<ScalarFloat> tgmm_tables =
+                array_from_file<float, ScalarFloat>(DATABASE_PATH "tgmm_tables.bin");
 
-        std::vector<ScalarFloat> tgmm_tables =
-            array_from_file<float, ScalarFloat>(DATABASE_PATH "tgmm_tables.bin");
+            auto [mis_weights, distrib_params] = get_tgmm_tables(tgmm_tables, turbidity, sun_eta);
 
-        auto [mis_weights, distrib_params] = getTGMMTables(tgmm_tables, turbidity, sun_eta);
+            m_gaussians = dr::load<FloatStorage>(distrib_params.data(), distrib_params.size());
+            m_gaussian_distr = DiscreteDistribution<Float>(mis_weights.data(), mis_weights.size());
+        }
 
-        m_gaussians = dr::load<FloatStorage>(distrib_params.data(), distrib_params.size());
-        m_gaussian_distr = DiscreteDistribution<Float>(mis_weights.data(), mis_weights.size());
+        ScalarFloat cos_phi = ScalarFrame3f::cos_phi(sun_dir);
+        ScalarFloat sin_phi = ScalarFrame3f::sin_phi(sun_dir);
+        m_sun_phi = dr::atan2(sin_phi, cos_phi);
+        m_sun_phi = dr::select(sin_phi < 0, dr::TwoPi<ScalarFloat> - m_sun_phi, m_sun_phi);
 
         m_sun_dir = sun_dir;
-
         dr::make_opaque(m_params, m_radiance, m_gaussian_distr, m_gaussians, m_sun_dir);
 
         m_flags = +EmitterFlags::Infinite | +EmitterFlags::SpatiallyVarying;
@@ -144,7 +152,6 @@ public:
         dr::make_opaque(m_bsphere.center, m_bsphere.radius, m_surface_area);
     }
 
-
     Spectrum eval(const SurfaceInteraction3f &si, Mask active) const override {
         MI_MASKED_FUNCTION(ProfilerPhase::EndpointEvaluate, active);
 
@@ -160,7 +167,7 @@ public:
             // dr::width(idx) == 1
 
             // Divide by normalisation factor
-            return renderChannels(idx, cos_theta, cos_gamma, active) / 106.856980;
+            return render_channels(idx, cos_theta, cos_gamma, active) / 106.856980;
 
         } else {
             Spectrum normalized_wavelengths = (si.wavelengths - WAVELENGTHS[0]) / WAVELENGTH_STEP;
@@ -170,8 +177,8 @@ public:
             SpecMask spec_mask = active & (query_idx >= 0) & (query_idx < 11);
 
             return dr::lerp(
-                renderChannels(query_idx, cos_theta, cos_gamma, spec_mask),
-                renderChannels(dr::minimum(query_idx + 1, NB_CHANNELS - 1), cos_theta, cos_gamma, spec_mask),
+                render_channels(query_idx, cos_theta, cos_gamma, spec_mask),
+                render_channels(dr::minimum(query_idx + 1, NB_CHANNELS - 1), cos_theta, cos_gamma, spec_mask),
                 lerp_factor);
 
         }
@@ -205,18 +212,25 @@ public:
                                                             Mask active) const override {
         MI_MASKED_FUNCTION(ProfilerPhase::EndpointSampleDirection, active);
 
-        Vector3f d = warp::square_to_uniform_sphere(sample);
+        Vector3f local_dir = tgmm_sample(sample, active);
+        Float inv_sin_theta = dr::safe_rsqrt(dr::maximum(
+            dr::square(local_dir.x()) + dr::square(local_dir.y()), dr::square(dr::Epsilon<Float>)));
+
+
+        Float pdf = tgmm_pdf(local_dir, active) * inv_sin_theta;
+        active &= pdf > 0;
 
         // Automatically enlarge the bounding sphere when it does not contain the reference point
         Float radius = dr::maximum(m_bsphere.radius, dr::norm(it.p - m_bsphere.center)),
               dist   = 2.f * radius;
 
+        Vector3f d = m_to_world.value().transform_affine(local_dir);
         DirectionSample3f ds;
         ds.p       = dr::fmadd(d, dist, it.p);
         ds.n       = -d;
         ds.uv      = sample;
         ds.time    = it.time;
-        ds.pdf     = warp::square_to_uniform_sphere_pdf(d);
+        ds.pdf     = pdf;
         ds.delta   = false;
         ds.emitter = this;
         ds.d       = d;
@@ -225,17 +239,19 @@ public:
         SurfaceInteraction3f si = dr::zeros<SurfaceInteraction3f>();
         si.wavelengths = it.wavelengths;
 
-        return {
-            ds,
-            depolarizer<Spectrum>(m_temp_rad->eval(si, active)) / ds.pdf
-        };
+        return { ds, (eval(si, active) / ds.pdf) & active };
     }
 
     Float pdf_direction(const Interaction3f &, const DirectionSample3f &ds,
                         Mask active) const override {
         MI_MASKED_FUNCTION(ProfilerPhase::EndpointEvaluate, active);
 
-        return warp::square_to_uniform_sphere_pdf(ds.d);
+        Vector3f local_dir = dr::normalize(m_to_world.value().inverse().transform_affine(ds.d));
+        Float inv_sin_theta = dr::safe_rsqrt(dr::maximum(
+            dr::square(local_dir.x()) + dr::square(local_dir.y()),
+            dr::square(dr::Epsilon<Float>)));
+
+        return tgmm_pdf(local_dir, active) * inv_sin_theta;
     }
 
     Spectrum eval_direction(const Interaction3f &it, const DirectionSample3f &,
@@ -312,15 +328,15 @@ private:
     };
 
 
-    Spectrum renderChannels(const SpecUInt32& idx,
+    Spectrum render_channels(const SpecUInt32& idx,
         const Float& cos_theta, const Float& cos_gamma, const SpecMask& active) const {
 
         Spectrum coefs[NB_PARAMS];
         for (uint8_t i = 0; i < NB_PARAMS; ++i)
             coefs[i] = dr::gather<Spectrum>(m_params, idx * NB_PARAMS + i, active);
 
-        Float gamma = dr::acos(cos_gamma);
-        Float cos_gamma_sqr = dr::square(cos_gamma);
+        Float gamma = dr::acos(cos_gamma),
+              cos_gamma_sqr = dr::square(cos_gamma);
 
         Spectrum c1 = 1 + coefs[0] * dr::exp(coefs[1] / (cos_theta + 0.01f));
         Spectrum chi = (1 + cos_gamma_sqr) / dr::pow(1 + dr::square(coefs[8]) - 2 * coefs[8] * cos_gamma, 1.5);
@@ -329,35 +345,35 @@ private:
         return c1 * c2 * dr::gather<Spectrum>(m_radiance, idx, active);
     }
 
-    MI_INLINE Point2f gaussianCdf(const Point2f& mu, const Point2f& sigma, const Point2f& x) const {
+    MI_INLINE Point2f gaussian_cdf(const Point2f& mu, const Point2f& sigma, const Point2f& x) const {
         return 0.5f * (1 + dr::erf(dr::InvSqrtTwo<Float> * (x - mu) / sigma));
     }
 
-    Float tgmmPdf(const Vector3f& direction, Mask active) const {
+    Float tgmm_pdf(const Vector3f& direction, Mask active) const {
 
         Point2f angles = from_spherical(direction);
         angles.x() += 0.5f * dr::Pi<ScalarFloat> - m_sun_phi;
         angles.x() = dr::select(angles.x() < 0, angles.x() + dr::TwoPi<ScalarFloat>, angles.x());
 
-        active &= angles.y() >= 0 && angles.y() < 0.5f * dr::Pi<ScalarFloat>;
+        active &= angles.y() > 0;
+        active &= angles.y() <= 0.5f * dr::Pi<ScalarFloat>;
 
-        const Point2f a = Point2f(0.0, 0.0),
-                      b = Point2f(dr::TwoPi<Float>, 0.5f * dr::Pi<Float>);
+        const Point2f a = { 0.0 },
+                      b = { dr::TwoPi<Float>, 0.5f * dr::Pi<Float> };
 
         Float pdf = 0.0;
         for (size_t i = 0; i < 4 * NB_GAUSSIAN; ++i) {
-            size_t baseIdx = i * NB_GAUSSIAN_PARAMS;
+            const size_t base_idx = i * NB_GAUSSIAN_PARAMS;
+            //Gaussian gaussian = dr::gather<Gaussian>(m_gaussians, base_idx, active);
+            Point2f mu    = { m_gaussians[base_idx + 0], m_gaussians[base_idx + 1] },
+                    sigma = { m_gaussians[base_idx + 2], m_gaussians[base_idx + 3] };
 
-            Point2f mu = Point2f(m_gaussians[baseIdx + 0], m_gaussians[baseIdx + 1]),
-                    sigma = Point2f(m_gaussians[baseIdx + 2], m_gaussians[baseIdx + 3]);
-
-            Point2f cdf_a = gaussianCdf(mu, sigma, a),
-                    cdf_b = gaussianCdf(mu, sigma, b);
+            Point2f cdf_a = gaussian_cdf(mu, sigma, a),
+                    cdf_b = gaussian_cdf(mu, sigma, b);
 
             Point2f sample = (angles - mu) / sigma;
-
             Float gaussian_pdf = warp::square_to_std_normal_pdf(sample);
-            gaussian_pdf *= m_gaussians[baseIdx + 4] / (cdf_b.x() - cdf_a.x()) * (cdf_b.y() - cdf_a.y()) * (sigma.x() * sigma.y());
+            gaussian_pdf *= m_gaussians[base_idx + 4] / ((cdf_b.x() - cdf_a.x()) * (cdf_b.y() - cdf_a.y()) * (sigma.x() * sigma.y()));
 
             pdf += gaussian_pdf;
         }
@@ -365,29 +381,41 @@ private:
         return dr::select(active, pdf, 0.0);
     }
 
-    Vector3f tgmmSample(const Point2f& sample, const Mask& active) {
+    Vector3f tgmm_sample(const Point2f& sample_, const Mask& active) const {
         UInt32 idx;
-        Point2f sample_ = sample;
-        std::tie(idx, sample_.x()) = m_gaussian_distr.sample_reuse(sample.x(), active);
+        Point2f sample = sample_;
+        std::tie(idx, sample.x()) = m_gaussian_distr.sample_reuse(sample.x(), active);
 
-        const Point2f a = Point2f(0.0, 0.0),
-                      b = Point2f(dr::TwoPi<Float>, 0.5f * dr::Pi<Float>);
+        Gaussian gaussian = dr::gather<Gaussian>(m_gaussians, idx, active);
 
-        return {};
+        const Point2f a = { 0.0 },
+                      b = { dr::TwoPi<Float>, 0.5f * dr::Pi<Float> };
+
+        const Point2f mu    = { gaussian[0], gaussian[1] },
+                      sigma = { gaussian[2], gaussian[3] };
+
+        const Point2f cdf_a = gaussian_cdf(mu, sigma, a),
+                      cdf_b = gaussian_cdf(mu, sigma, b);
+
+        sample = dr::fmadd(cdf_b - cdf_a, sample, cdf_a);
+        Point2f res = dr::SqrtTwo<Float> * dr::erfinv(2 * sample - 1) * sigma + mu;
+        res.x() += 0.5f * dr::Pi<Float> - m_sun_phi;
+
+        return to_spherical(res);
     }
 
-    std::vector<ScalarFloat> bezierInterpolate(
-        const std::vector<ScalarFloat>& dataset, size_t outSize,
+    std::vector<ScalarFloat> bezier_interpolate(
+        const std::vector<ScalarFloat>& dataset, size_t out_size,
         const ScalarUInt32& offset, const ScalarFloat& x) const {
 
         constexpr ScalarFloat coefs[NB_CTRL_PTS] =
             {1, 5, 10, 10, 5, 1};
 
-        std::vector<ScalarFloat> res(outSize, 0.0f);
+        std::vector<ScalarFloat> res(out_size, 0.0f);
         for (size_t i = 0; i < NB_CTRL_PTS; ++i) {
             ScalarFloat coef = coefs[i] * dr::pow(1 - x, 5 - i) * dr::pow(x, i);
-            ScalarUInt32 index = offset + i * outSize;
-            for (size_t j = 0; j < outSize; ++j)
+            ScalarUInt32 index = offset + i * out_size;
+            for (size_t j = 0; j < out_size; ++j)
                 res[j] += coef * dataset[index + j];
         }
 
@@ -404,12 +432,12 @@ private:
         return res;
     }
 
-    auto getTGMMTables(const std::vector<ScalarFloat>& dataset,
+    auto get_tgmm_tables(const std::vector<ScalarFloat>& dataset,
                         ScalarFloat t, ScalarFloat eta) const {
 
         eta = dr::rad_to_deg(eta);
         ScalarFloat eta_idx_f = dr::clip((eta - 2) / 3, 0, NB_ETAS - 1),
-                    t_idx_f = dr::clip(t - 2, 0, NB_TURBIDITY - 1);
+                    t_idx_f = dr::clip(t - 2, 0, (NB_TURBIDITY - 1) - 1);
 
         ScalarUInt32 eta_idx_low = dr::floor2int<ScalarUInt32>(eta_idx_f),
                      t_idx_low = dr::floor2int<ScalarUInt32>(t_idx_f);
@@ -420,38 +448,38 @@ private:
         ScalarFloat eta_rem = eta_idx_f - eta_idx_low,
                     t_rem = t_idx_f - t_idx_low;
 
-        const size_t tBlockSize = dataset.size() / (NB_TURBIDITY - 1),
-                     etaBlockSize = tBlockSize / NB_ETAS;
+        const size_t t_block_size = dataset.size() / (NB_TURBIDITY - 1),
+                     eta_block_size = t_block_size / NB_ETAS;
 
         ScalarUInt64 indices[4] = {
-            t_idx_low * tBlockSize + eta_idx_low * etaBlockSize,
-            t_idx_low * tBlockSize + eta_idx_high * etaBlockSize,
-            t_idx_high * tBlockSize + eta_idx_low * etaBlockSize,
-            t_idx_high * tBlockSize + eta_idx_high * etaBlockSize
+            t_idx_low * t_block_size + eta_idx_low * eta_block_size,
+            t_idx_low * t_block_size + eta_idx_high * eta_block_size,
+            t_idx_high * t_block_size + eta_idx_low * eta_block_size,
+            t_idx_high * t_block_size + eta_idx_high * eta_block_size
         };
-        ScalarFloat lerpFactors[4] = {
-            t_rem * eta_rem,
-            t_rem * (1 - eta_rem),
+        ScalarFloat lerp_factors[4] = {
+            (1 - t_rem) * (1 - eta_rem),
             (1 - t_rem) * eta_rem,
-            (1 - t_rem) * (1 - eta_rem)
+            t_rem * (1 - eta_rem),
+            t_rem * eta_rem
         };
-        std::vector<ScalarFloat> distribParams(4 * etaBlockSize);
+        std::vector<ScalarFloat> distrib_params(4 * eta_block_size);
         for (size_t i = 0; i < 4; ++i) {
-            for (size_t j = 0; j < etaBlockSize; ++j) {
-                ScalarUInt32 index = i * etaBlockSize + j;
-                distribParams[index] = dataset[indices[i] + j];
-                distribParams[index] *= index % NB_GAUSSIAN_PARAMS == 4 ? lerpFactors[i] : 1;
+            for (size_t j = 0; j < eta_block_size; ++j) {
+                ScalarUInt32 index = i * eta_block_size + j;
+                distrib_params[index] = dataset[indices[i] + j];
+                distrib_params[index] *= index % NB_GAUSSIAN_PARAMS == 4 ? lerp_factors[i] : 1;
             }
         }
 
-        std::vector<ScalarFloat> misWeights(4 * NB_GAUSSIAN);
+        std::vector<ScalarFloat> mis_weights(4 * NB_GAUSSIAN);
         for (size_t i = 0; i < 4 * NB_GAUSSIAN; ++i)
-            misWeights[i] = dataset[i * (4 * NB_GAUSSIAN_PARAMS) + 4];
+            mis_weights[i] = dataset[i * NB_GAUSSIAN_PARAMS + 4];
 
-        return std::make_pair(misWeights, distribParams);
+        return std::make_pair(mis_weights, distrib_params);
     }
 
-    std::vector<ScalarFloat> getRadianceParams(
+    std::vector<ScalarFloat> get_radiance_params(
         const std::vector<ScalarFloat>& dataset,
         const std::array<ScalarFloat, NB_CHANNELS>& albedo,
         ScalarFloat turbidity, ScalarFloat eta) const {
@@ -467,29 +495,29 @@ private:
 
         ScalarFloat t_rem = turbidity - t_int;
 
-        const size_t tBlockSize = dataset.size() / NB_TURBIDITY,
-                     aBlockSize = tBlockSize / NB_ALBEDO,
-                     ctrlBlockSize = aBlockSize / NB_CTRL_PTS,
-                     innerBlockSize = ctrlBlockSize / NB_CHANNELS;
+        const size_t t_block_size = dataset.size() / NB_TURBIDITY,
+                     a_block_size = t_block_size / NB_ALBEDO,
+                     ctrl_block_size = a_block_size / NB_CTRL_PTS,
+                     inner_block_size = ctrl_block_size / NB_CHANNELS;
 
         std::vector<ScalarFloat>
-            t_low_a_low = bezierInterpolate(dataset, ctrlBlockSize, t_low * tBlockSize + 0 * aBlockSize, x),
-            t_high_a_low = bezierInterpolate(dataset, ctrlBlockSize, t_high * tBlockSize + 0 * aBlockSize, x),
-            t_low_a_high = bezierInterpolate(dataset, ctrlBlockSize, t_low * tBlockSize + 1 * aBlockSize, x),
-            t_high_a_high = bezierInterpolate(dataset, ctrlBlockSize, t_high * tBlockSize + 1 * aBlockSize, x);
+            t_low_a_low = bezier_interpolate(dataset, ctrl_block_size, t_low * t_block_size + 0 * a_block_size, x),
+            t_high_a_low = bezier_interpolate(dataset, ctrl_block_size, t_high * t_block_size + 0 * a_block_size, x),
+            t_low_a_high = bezier_interpolate(dataset, ctrl_block_size, t_low * t_block_size + 1 * a_block_size, x),
+            t_high_a_high = bezier_interpolate(dataset, ctrl_block_size, t_high * t_block_size + 1 * a_block_size, x);
 
         std::vector<ScalarFloat>
             res_a_low = lerp_vectors(t_low_a_low, t_high_a_low, t_rem),
             res_a_high = lerp_vectors(t_low_a_high, t_high_a_high, t_rem);
 
-        std::vector<ScalarFloat> res(ctrlBlockSize);
-        for (size_t i = 0; i < ctrlBlockSize; ++i)
-            res[i] = dr::lerp(res_a_low[i], res_a_high[i], albedo[i/innerBlockSize]);
+        std::vector<ScalarFloat> res(ctrl_block_size);
+        for (size_t i = 0; i < ctrl_block_size; ++i)
+            res[i] = dr::lerp(res_a_low[i], res_a_high[i], albedo[i/inner_block_size]);
 
         return res;
     }
 
-    static auto extractAlbedo(const ref<Texture>& albedo) {
+    static auto extract_albedo(const ref<Texture>& albedo) {
         std::array<ScalarFloat, NB_CHANNELS> albedo_buff = {};
         SurfaceInteraction3f si = dr::zeros<SurfaceInteraction3f>();
         if constexpr (!dr::is_array_v<Float> && is_rgb_v<Spectrum>) {
@@ -502,11 +530,11 @@ private:
                 si.wavelengths = WAVELENGTHS[i];
                 albedo_buff[i] = albedo->eval(si)[0];
             }
+
         } else if constexpr (is_rgb_v<Spectrum>) {
             Color3f temp = albedo->eval(si);
             for (size_t i = 0; i < NB_CHANNELS; ++i)
                 albedo_buff[i] = temp[i][0];
-            Log(Info, "Result albedo: %f", temp);
 
 
         } else if constexpr (is_spectral_v<Spectrum>) {
@@ -531,16 +559,25 @@ private:
         return albedo_buff;
     }
 
+    Vector3f to_spherical(const Point2f& angles) const {
+        auto [sp, cp] = dr::sincos(angles.x());
+        auto [st, ct] = dr::sincos(angles.y());
+
+        return {
+            cp * st, sp * st, ct
+        };
+    }
+
     Point2f from_spherical(const Vector3f& v) const {
         return {
-            dr::safe_sqrt(dr::atan2(v.y(), v.x())),
+            dr::atan2(v.y(), v.x()),
             drjit::unit_angle_z(v)
         };
     }
 
     ScalarPoint2f from_scalar_spherical(const ScalarVector3f& v) const {
         return {
-            dr::safe_sqrt(dr::atan2(v.y(), v.x())),
+            dr::atan2(v.y(), v.x()),
             drjit::unit_angle_z(v)
         };
     }

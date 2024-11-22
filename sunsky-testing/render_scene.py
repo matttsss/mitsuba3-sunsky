@@ -5,6 +5,7 @@ import drjit as dr
 import mitsuba as mi
 mi.set_variant("cuda_spectral")
 
+dr.set_log_level(dr.LogLevel.Warn)
 from rendering.spherical_sensor import SphericalSensor
 
 def render_scene(scene_name):

@@ -7,7 +7,6 @@ import matplotlib.pyplot as plt
 
 mi.set_variant("cuda_rgb")
 
-from rendering.sunsky_plugin import SunskyEmitter
 from helpers import get_north_hemisphere_rays, get_spherical_rays
 from rendering.sunsky_data import get_tgmm_table, NB_GAUSSIANS, NB_GAUSSIAN_PARAMS
 
@@ -316,12 +315,12 @@ def test_plot_spectral():
 if __name__ == "__main__":
     #mi.write_sky_model_data_v2("sunsky-testing/res/datasets/ssm_dataset")
 
-    test_gmm_values()
-    test_get_tgmm_table()
-    test_mean_radiance_data()
-    test_radiance_data()
+    #test_gmm_values()
+    #test_get_tgmm_table()
+    #test_mean_radiance_data()
+    #test_radiance_data()
 
-    plot_pdf()
+    #plot_pdf()
     test_chi2_emitter()
 
     #test_plot_spectral()
