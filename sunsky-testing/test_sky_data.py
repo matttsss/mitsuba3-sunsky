@@ -11,7 +11,7 @@ from rendering.sunsky_plugin import SunskyEmitter
 from helpers import get_north_hemisphere_rays, get_spherical_rays
 from rendering.sunsky_data import get_tgmm_table, NB_GAUSSIANS, NB_GAUSSIAN_PARAMS
 
-plugin = "sunsky_p"
+plugin = "sunsky"
 
 def test_gmm_values():
     dr.print("Testing GMM values")
@@ -322,7 +322,7 @@ if __name__ == "__main__":
     #test_mean_radiance_data()
     #test_radiance_data()
 
-    plot_pdf()
+    #plot_pdf()
     test_chi2_emitter()
 
     #test_plot_spectral()

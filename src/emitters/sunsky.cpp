@@ -64,6 +64,7 @@ public:
 
     using FloatStorage = DynamicBuffer<Float>;
     using Gaussian = dr::Array<Float, NB_GAUSSIAN_PARAMS>;
+    using Albedo = std::array<ScalarFloat, is_spectral_v<Spectrum> ? 11 : 3>;
     using SpecUInt32 = dr::uint32_array_t<Spectrum>;
     using SpecMask = dr::mask_t<Spectrum>;
 
@@ -82,7 +83,7 @@ public:
             Throw("Expected a non-spatially varying radiance spectra!");
 
         dr::eval(albedo);
-        std::array<ScalarFloat, NB_CHANNELS> albedo_buff = extract_albedo(albedo);
+        Albedo albedo_buff = extract_albedo(albedo);
 
         // ================= GET ANGLES =================
         ScalarVector3f local_sun_dir = dr::normalize(
@@ -95,43 +96,36 @@ public:
             sun_phi,
             dr::TwoPi<Float> - sun_phi);
 
-        ScalarFloat sun_eta = 0.5f * dr::Pi<ScalarFloat> - dr::unit_angle_z(local_sun_dir);
+        ScalarFloat sun_theta = dr::unit_angle_z(local_sun_dir),
+                    sun_eta = 0.5f * dr::Pi<ScalarFloat> - sun_theta;
 
+        // ================= GET SKY RADIANCE =================
+        m_dataset = array_from_file<double, ScalarFloat>(DATABASE_PATH + DATASET_NAME + ".bin");
+        m_rad_dataset = array_from_file<double, ScalarFloat>(DATABASE_PATH + DATASET_NAME + "_rad.bin");
+
+        update_radiance_params(albedo_buff, turbidity, sun_eta);
+
+        // ================= GET SUN RADIANCE =================
+        update_sun_radiance(sun_theta, turbidity);
+
+        // ================= GET TGMM TABLES =================
+        m_tgmm_tables = array_from_file<float, ScalarFloat>(DATABASE_PATH "tgmm_tables.bin");
+
+        update_tgmm_distribution(turbidity, sun_eta);
+
+
+        m_turbidity = turbidity;
         m_sun_phi = sun_phi;
         m_local_sun_dir = local_sun_dir;
 
-        // ================= GET RADIANCE =================
-        {
-            std::vector<ScalarFloat> dataset =
-                array_from_file<double, ScalarFloat>(DATABASE_PATH + DATASET_NAME + ".bin");
+        dr::make_opaque(m_turbidity, m_sun_phi, m_local_sun_dir);
 
-            std::vector<ScalarFloat> rad_dataset =
-                array_from_file<double, ScalarFloat>(DATABASE_PATH + DATASET_NAME + "_rad.bin");
-
-            std::vector<ScalarFloat>
-                    params = get_radiance_params(dataset, albedo_buff, turbidity, sun_eta),
-                    radiance = get_radiance_params(rad_dataset, albedo_buff, turbidity, sun_eta);
-
-            m_params = dr::load<FloatStorage>(params.data(), params.size());
-            m_radiance = dr::load<FloatStorage>(radiance.data(), radiance.size());
-        }
-        {
-            std::vector<ScalarFloat> tgmm_tables =
-                array_from_file<float, ScalarFloat>(DATABASE_PATH "tgmm_tables.bin");
-
-            auto [mis_weights, distrib_params] = get_tgmm_tables(tgmm_tables, turbidity, sun_eta);
-
-            m_gaussians = dr::load<FloatStorage>(distrib_params.data(), distrib_params.size());
-            m_gaussian_distr = DiscreteDistribution<Float>(mis_weights.data(), mis_weights.size());
-        }
-
-        dr::make_opaque(m_params, m_radiance, m_gaussian_distr, m_gaussians, m_local_sun_dir, m_sun_phi);
         m_flags = +EmitterFlags::Infinite | +EmitterFlags::SpatiallyVarying;
     }
 
     void traverse(TraversalCallback *callback) override {
         Base::traverse(callback);
-        callback->put_object("radiance", m_temp_rad.get(), +ParamFlags::Differentiable);
+        callback->put_parameter("turbidity", m_turbidity, +ParamFlags::Differentiable);
     }
 
     void set_scene(const Scene *scene) override {
@@ -162,10 +156,10 @@ public:
 
         if constexpr (is_rgb_v<Spectrum>) {
 
-            SpecUInt32 idx = SpecUInt32({0, 1, 2});
             // dr::width(idx) == 1
+            SpecUInt32 idx = SpecUInt32({0, 1, 2});
 
-            // Divide by normalisation factor
+            // Divide by Sum of CIE Y value
             return render_channels(idx, cos_theta, cos_gamma, active) / 106.856980;
 
         } else {
@@ -239,7 +233,6 @@ public:
     std::string to_string() const override {
         std::ostringstream oss;
         oss << "SunskyEmitter[" << std::endl
-            << "  radiance = " << string::indent(m_temp_rad) << "," << std::endl
             << "  bsphere = " << string::indent(m_bsphere) << std::endl
             << "]";
         return oss.str();
@@ -258,19 +251,27 @@ private:
                             RAD_DATASET_SIZE = NB_TURBIDITY * NB_ALBEDO * NB_CTRL_PTS * NB_CHANNELS,
                             WAVELENGTH_STEP = 40;
 
-    ref<Texture> m_temp_rad;
-
     Float m_surface_area;
     BoundingSphere3f m_bsphere;
+
+    Float m_turbidity;
 
     Float m_sun_phi;
     Vector3f m_local_sun_dir;
 
-    FloatStorage m_radiance;
+    // Radiance parameters
     FloatStorage m_params;
-    FloatStorage m_gaussians;
+    FloatStorage m_sky_radiance;
+    FloatStorage m_sun_radiance;
 
+    // Sampling parameters
+    FloatStorage m_gaussians;
     DiscreteDistribution<Float> m_gaussian_distr;
+
+    // Permanent datasets loaded from files
+    std::vector<ScalarFloat> m_dataset;
+    std::vector<ScalarFloat> m_rad_dataset;
+    std::vector<ScalarFloat> m_tgmm_tables;
 
 
     static constexpr size_t WAVELENGTHS[11] = {
@@ -292,7 +293,7 @@ private:
         Spectrum chi = (1 + cos_gamma_sqr) / dr::pow(1 + dr::square(coefs[8]) - 2 * coefs[8] * cos_gamma, 1.5);
         Spectrum c2 = coefs[2] + coefs[3] * dr::exp(coefs[4] * gamma) + coefs[5] * cos_gamma_sqr + coefs[6] * chi + coefs[7] * dr::safe_sqrt(cos_theta);
 
-        return c1 * c2 * dr::gather<Spectrum>(m_radiance, idx, active);
+        return c1 * c2 * dr::gather<Spectrum>(m_sky_radiance, idx, active);
     }
 
     MI_INLINE Point2f gaussian_cdf(const Point2f& mu, const Point2f& sigma, const Point2f& x) const {
@@ -375,18 +376,14 @@ private:
         return res;
     }
 
-    std::vector<ScalarFloat> lerp_vectors(const std::vector<ScalarFloat>& a, const std::vector<ScalarFloat>& b, const ScalarFloat& t) const {
-        assert(a.size() == b.size());
+    void update_sun_radiance(ScalarFloat sun_theta, ScalarFloat turbidity) {
+        std::vector<ScalarFloat> sun_radiance = compute_sun_radiance(sun_theta, turbidity);
+        m_sun_radiance = dr::load<FloatStorage>(sun_radiance.data(), sun_radiance.size());
 
-        std::vector<ScalarFloat> res(a.size());
-        for (size_t i = 0; i < a.size(); ++i)
-            res[i] = dr::lerp(a[i], b[i], t);
-
-        return res;
+        dr::make_opaque(m_sun_radiance);
     }
 
-    auto get_tgmm_tables(const std::vector<ScalarFloat>& dataset,
-                        ScalarFloat t, ScalarFloat eta) const {
+    void update_tgmm_distribution(ScalarFloat t, ScalarFloat eta) {
 
         eta = dr::rad_to_deg(eta);
         ScalarFloat eta_idx_f = dr::clip((eta - 2) / 3, 0, NB_ETAS - 1),
@@ -401,7 +398,7 @@ private:
         ScalarFloat eta_rem = eta_idx_f - eta_idx_low,
                     t_rem = t_idx_f - t_idx_low;
 
-        const size_t t_block_size = dataset.size() / (NB_TURBIDITY - 1),
+        const size_t t_block_size = m_tgmm_tables.size() / (NB_TURBIDITY - 1),
                      eta_block_size = t_block_size / NB_ETAS;
 
         const ScalarUInt64 indices[4] = {
@@ -420,21 +417,36 @@ private:
         for (size_t i = 0; i < 4; ++i) {
             for (size_t j = 0; j < eta_block_size; ++j) {
                 ScalarUInt32 index = i * eta_block_size + j;
-                distrib_params[index] = dataset[indices[i] + j];
+                distrib_params[index] = m_tgmm_tables[indices[i] + j];
                 distrib_params[index] *= index % NB_GAUSSIAN_PARAMS == 4 ? lerp_factors[i] : 1;
             }
         }
 
         std::vector<ScalarFloat> mis_weights(4 * NB_GAUSSIAN);
         for (size_t i = 0; i < 4 * NB_GAUSSIAN; ++i)
-            mis_weights[i] = dataset[i * NB_GAUSSIAN_PARAMS + 4];
+            mis_weights[i] = m_tgmm_tables[i * NB_GAUSSIAN_PARAMS + 4];
 
-        return std::make_pair(mis_weights, distrib_params);
+        m_gaussians = dr::load<FloatStorage>(distrib_params.data(), distrib_params.size());
+        m_gaussian_distr = DiscreteDistribution<Float>(mis_weights.data(), mis_weights.size());
+
+        dr::make_opaque(m_gaussians, m_gaussian_distr);
     }
 
-    std::vector<ScalarFloat> get_radiance_params(
+    void update_radiance_params(const Albedo& albedo,
+                                ScalarFloat turbidity, ScalarFloat eta) {
+        std::vector<ScalarFloat>
+                params = compute_radiance_params(m_dataset, albedo, turbidity, eta),
+                radiance = compute_radiance_params(m_rad_dataset, albedo, turbidity, eta);
+
+        m_params = dr::load<FloatStorage>(params.data(), params.size());
+        m_sky_radiance = dr::load<FloatStorage>(radiance.data(), radiance.size());
+
+        dr::make_opaque(m_params, m_sky_radiance);
+    }
+
+    std::vector<ScalarFloat> compute_radiance_params(
         const std::vector<ScalarFloat>& dataset,
-        const std::array<ScalarFloat, NB_CHANNELS>& albedo,
+        const Albedo& albedo,
         ScalarFloat turbidity, ScalarFloat eta) const {
 
         turbidity = dr::clip(turbidity, 1.f, NB_TURBIDITY);
@@ -471,7 +483,7 @@ private:
     }
 
     static auto extract_albedo(const ref<Texture>& albedo) {
-        std::array<ScalarFloat, NB_CHANNELS> albedo_buff = {};
+        Albedo albedo_buff = {};
         SurfaceInteraction3f si = dr::zeros<SurfaceInteraction3f>();
         if constexpr (!dr::is_array_v<Float> && is_rgb_v<Spectrum>) {
             Color3f temp = albedo->eval(si);
@@ -512,21 +524,6 @@ private:
         return albedo_buff;
     }
 
-    Vector3f to_spherical(const Point2f& angles) const {
-        auto [sp, cp] = dr::sincos(angles.x());
-        auto [st, ct] = dr::sincos(angles.y());
-
-        return {
-            cp * st, sp * st, ct
-        };
-    }
-
-    Point2f from_spherical(const Vector3f& v) const {
-        return {
-            dr::atan2(v.y(), v.x()),
-            dr::unit_angle_z(v)
-        };
-    }
 };
 
 MI_IMPLEMENT_CLASS_VARIANT(SunskyEmitter, Emitter)

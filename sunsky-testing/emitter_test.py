@@ -45,6 +45,8 @@ def render_and_compare(ref_path, params: tuple[float]):
         mi.util.write_bitmap("sunsky-testing/res/renders/fail.exr", rendered_scene)
         exit(1)
 
+    dr.print("Pass when rendering t={t}, a={a}, eta={eta}", t= params[1], a=params[2], eta=params[0])
+
 
 
 def tests():
