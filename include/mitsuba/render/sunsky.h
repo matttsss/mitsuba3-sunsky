@@ -68,7 +68,7 @@ NAMESPACE_BEGIN(mitsuba)
 
         // Write headers
         file.write("SKY", 3);
-        file.write((uint32_t)1);
+        file.write((uint32_t)2);
 
         // Write tensor dimensions
         file.write(nb_dims);

@@ -185,4 +185,4 @@ class SunskyEmitter(mi.Emitter):
     def is_environment(self):
         return True
 
-mi.register_emitter("sunsky", SunskyEmitter)
+mi.register_emitter("sunsky_p", SunskyEmitter)

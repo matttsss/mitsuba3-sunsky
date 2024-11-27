@@ -85,14 +85,20 @@ public:
         std::array<ScalarFloat, NB_CHANNELS> albedo_buff = extract_albedo(albedo);
 
         // ================= GET ANGLES =================
-        ScalarVector3f sun_dir = dr::normalize(
+        ScalarVector3f local_sun_dir = dr::normalize(
             m_to_world.scalar().inverse()
             .transform_affine(props.get<ScalarVector3f>("sun_direction")));
 
-        ScalarPoint2f angles = from_scalar_spherical(sun_dir);
-        angles.x() = dr::select(dr::sin(angles.x()) < 0, dr::TwoPi<Float> - angles.x(), angles.x());
+        ScalarFloat sun_phi = dr::atan2(local_sun_dir.y(), local_sun_dir.x());
+        sun_phi = dr::select(
+            ScalarFrame3f::sin_phi(local_sun_dir) >= 0,
+            sun_phi,
+            dr::TwoPi<Float> - sun_phi);
 
-        ScalarFloat sun_eta = 0.5f * dr::Pi<ScalarFloat> - angles.y();
+        ScalarFloat sun_eta = 0.5f * dr::Pi<ScalarFloat> - dr::unit_angle_z(local_sun_dir);
+
+        m_sun_phi = sun_phi;
+        m_local_sun_dir = local_sun_dir;
 
         // ================= GET RADIANCE =================
         {
@@ -119,14 +125,7 @@ public:
             m_gaussian_distr = DiscreteDistribution<Float>(mis_weights.data(), mis_weights.size());
         }
 
-        ScalarFloat cos_phi = ScalarFrame3f::cos_phi(sun_dir);
-        ScalarFloat sin_phi = ScalarFrame3f::sin_phi(sun_dir);
-        m_sun_phi = dr::atan2(sin_phi, cos_phi);
-        m_sun_phi = dr::select(sin_phi < 0, dr::TwoPi<ScalarFloat> - m_sun_phi, m_sun_phi);
-
-        m_sun_dir = sun_dir;
-        dr::make_opaque(m_params, m_radiance, m_gaussian_distr, m_gaussians, m_sun_dir);
-
+        dr::make_opaque(m_params, m_radiance, m_gaussian_distr, m_gaussians, m_local_sun_dir, m_sun_phi);
         m_flags = +EmitterFlags::Infinite | +EmitterFlags::SpatiallyVarying;
     }
 
@@ -157,7 +156,7 @@ public:
 
         Vector3f local_wi = dr::normalize(m_to_world.value().inverse().transform_affine(si.wi));
         Float cos_theta = Frame3f::cos_theta(-local_wi);
-        Float cos_gamma = dr::dot(m_sun_dir, -local_wi);
+        Float cos_gamma = dr::dot(m_local_sun_dir, -local_wi);
 
         active &= cos_theta >= 0;
 
@@ -184,29 +183,6 @@ public:
         }
     }
 
-    std::pair<Ray3f, Spectrum> sample_ray(Float time, Float wavelength_sample,
-                                          const Point2f &sample2, const Point2f &sample3,
-                                          Mask active) const override {
-        MI_MASKED_FUNCTION(ProfilerPhase::EndpointSampleRay, active);
-
-        // 1. Sample spatial component
-        Vector3f v0 = warp::square_to_uniform_sphere(sample2);
-        Point3f orig = dr::fmadd(v0, m_bsphere.radius, m_bsphere.center);
-
-        // 2. Sample diral component
-        Vector3f v1 = warp::square_to_cosine_hemisphere(sample3),
-                 dir = Frame3f(-v0).to_world(v1);
-
-        // 3. Sample spectrum
-        auto [wavelengths, weight] = sample_wavelengths(
-            dr::zeros<SurfaceInteraction3f>(), wavelength_sample, active);
-
-        weight *= m_surface_area * dr::Pi<ScalarFloat>;
-
-        return { Ray3f(orig, dir, time, wavelengths),
-                 depolarizer<Spectrum>(weight) };
-    }
-
     std::pair<DirectionSample3f, Spectrum> sample_direction(const Interaction3f &it,
                                                             const Point2f &sample,
                                                             Mask active) const override {
@@ -214,7 +190,8 @@ public:
 
         Vector3f local_dir = tgmm_sample(sample, active);
         Float inv_sin_theta = dr::safe_rsqrt(dr::maximum(
-            dr::square(local_dir.x()) + dr::square(local_dir.y()), dr::square(dr::Epsilon<Float>)));
+            dr::square(local_dir.x()) + dr::square(local_dir.y()),
+            dr::square(dr::Epsilon<Float>)));
 
 
         Float pdf = tgmm_pdf(local_dir, active) * inv_sin_theta;
@@ -230,7 +207,7 @@ public:
         ds.n       = -d;
         ds.uv      = sample;
         ds.time    = it.time;
-        ds.pdf     = pdf;
+        ds.pdf     = dr::select(active, pdf, 0);
         ds.delta   = false;
         ds.emitter = this;
         ds.d       = d;
@@ -239,7 +216,7 @@ public:
         SurfaceInteraction3f si = dr::zeros<SurfaceInteraction3f>();
         si.wavelengths = it.wavelengths;
 
-        return { ds, (eval(si, active) / ds.pdf) & active };
+        return { ds, eval(si, active) / pdf };
     }
 
     Float pdf_direction(const Interaction3f &, const DirectionSample3f &ds,
@@ -252,33 +229,6 @@ public:
             dr::square(dr::Epsilon<Float>)));
 
         return tgmm_pdf(local_dir, active) * inv_sin_theta;
-    }
-
-    Spectrum eval_direction(const Interaction3f &it, const DirectionSample3f &,
-                            Mask active) const override {
-        SurfaceInteraction3f si = dr::zeros<SurfaceInteraction3f>();
-        si.wavelengths = it.wavelengths;
-        return depolarizer<Spectrum>(m_temp_rad->eval(si, active));
-    }
-
-    std::pair<Wavelength, Spectrum>
-    sample_wavelengths(const SurfaceInteraction3f &si, Float sample,
-                       Mask active) const override {
-        return m_temp_rad->sample_spectrum(
-            si, math::sample_shifted<Wavelength>(sample), active);
-    }
-
-    std::pair<PositionSample3f, Float>
-    sample_position(Float /*time*/, const Point2f & /*sample*/,
-                    Mask /*active*/) const override {
-        if constexpr (dr::is_jit_v<Float>) {
-            /* When virtual function calls are recorded in symbolic mode,
-               we can't throw an exception here. */
-            return { dr::zeros<PositionSample3f>(),
-                     dr::full<Float>(dr::NaN<ScalarFloat>) };
-        } else {
-            NotImplementedError("sample_position");
-        }
     }
 
     /// This emitter does not occupy any particular region of space, return an invalid bounding box
@@ -314,7 +264,7 @@ private:
     BoundingSphere3f m_bsphere;
 
     Float m_sun_phi;
-    Vector3f m_sun_dir;
+    Vector3f m_local_sun_dir;
 
     FloatStorage m_radiance;
     FloatStorage m_params;
@@ -352,11 +302,13 @@ private:
     Float tgmm_pdf(const Vector3f& direction, Mask active) const {
 
         Point2f angles = from_spherical(direction);
-        angles.x() += 0.5f * dr::Pi<ScalarFloat> - m_sun_phi;
-        angles.x() = dr::select(angles.x() < 0, angles.x() + dr::TwoPi<ScalarFloat>, angles.x());
 
-        active &= angles.y() > 0;
-        active &= angles.y() <= 0.5f * dr::Pi<ScalarFloat>;
+        // Adjust angle for sun position
+        angles.x() += 0.5f * dr::Pi<Float> - m_sun_phi;
+        angles.x() = dr::select(angles.x() < 0, angles.x() + dr::TwoPi<Float>, angles.x());
+
+        // Bounds check for theta
+        active &= (angles.y() > 0) & (angles.y() <= 0.5f * dr::Pi<Float>);
 
         const Point2f a = { 0.0 },
                       b = { dr::TwoPi<Float>, 0.5f * dr::Pi<Float> };
@@ -371,11 +323,12 @@ private:
             Point2f cdf_a = gaussian_cdf(mu, sigma, a),
                     cdf_b = gaussian_cdf(mu, sigma, b);
 
+            Float volume = (cdf_b.x() - cdf_a.x()) * (cdf_b.y() - cdf_a.y()) * (sigma.x() * sigma.y());
+
             Point2f sample = (angles - mu) / sigma;
             Float gaussian_pdf = warp::square_to_std_normal_pdf(sample);
-            gaussian_pdf *= m_gaussians[base_idx + 4] / ((cdf_b.x() - cdf_a.x()) * (cdf_b.y() - cdf_a.y()) * (sigma.x() * sigma.y()));
 
-            pdf += gaussian_pdf;
+            pdf += m_gaussians[base_idx + 4] * gaussian_pdf / volume;
         }
 
         return dr::select(active, pdf, 0.0);
@@ -422,7 +375,7 @@ private:
         return res;
     }
 
-    static std::vector<ScalarFloat> lerp_vectors(const std::vector<ScalarFloat>& a, const std::vector<ScalarFloat>& b, const ScalarFloat& t) {
+    std::vector<ScalarFloat> lerp_vectors(const std::vector<ScalarFloat>& a, const std::vector<ScalarFloat>& b, const ScalarFloat& t) const {
         assert(a.size() == b.size());
 
         std::vector<ScalarFloat> res(a.size());
@@ -451,13 +404,13 @@ private:
         const size_t t_block_size = dataset.size() / (NB_TURBIDITY - 1),
                      eta_block_size = t_block_size / NB_ETAS;
 
-        ScalarUInt64 indices[4] = {
+        const ScalarUInt64 indices[4] = {
             t_idx_low * t_block_size + eta_idx_low * eta_block_size,
             t_idx_low * t_block_size + eta_idx_high * eta_block_size,
             t_idx_high * t_block_size + eta_idx_low * eta_block_size,
             t_idx_high * t_block_size + eta_idx_high * eta_block_size
         };
-        ScalarFloat lerp_factors[4] = {
+        const ScalarFloat lerp_factors[4] = {
             (1 - t_rem) * (1 - eta_rem),
             (1 - t_rem) * eta_rem,
             t_rem * (1 - eta_rem),
@@ -490,8 +443,8 @@ private:
         ScalarFloat x = dr::pow(2 * dr::InvPi<ScalarFloat> * eta, 1.f/3.f);
 
         ScalarUInt32 t_int = dr::floor2int<ScalarUInt32>(turbidity),
-               t_low = dr::maximum(t_int - 1, 0),
-               t_high = dr::minimum(t_int, NB_TURBIDITY - 1);
+                     t_low = dr::maximum(t_int - 1, 0),
+                     t_high = dr::minimum(t_low + 1, NB_TURBIDITY - 1);
 
         ScalarFloat t_rem = turbidity - t_int;
 
@@ -571,14 +524,7 @@ private:
     Point2f from_spherical(const Vector3f& v) const {
         return {
             dr::atan2(v.y(), v.x()),
-            drjit::unit_angle_z(v)
-        };
-    }
-
-    ScalarPoint2f from_scalar_spherical(const ScalarVector3f& v) const {
-        return {
-            dr::atan2(v.y(), v.x()),
-            drjit::unit_angle_z(v)
+            dr::unit_angle_z(v)
         };
     }
 };

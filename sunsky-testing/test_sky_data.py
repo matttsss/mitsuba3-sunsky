@@ -7,9 +7,11 @@ import matplotlib.pyplot as plt
 
 mi.set_variant("cuda_rgb")
 
+from rendering.sunsky_plugin import SunskyEmitter
 from helpers import get_north_hemisphere_rays, get_spherical_rays
 from rendering.sunsky_data import get_tgmm_table, NB_GAUSSIANS, NB_GAUSSIAN_PARAMS
 
+plugin = "sunsky_p"
 
 def test_gmm_values():
     dr.print("Testing GMM values")
@@ -78,12 +80,12 @@ def test_chi2_emitter():
 
     # Compute coefficients
     sky = {
-        "type": "sunsky",
+        "type": plugin,
         "sun_direction": [cp_sun * st, sp_sun * st, ct],
         "turbidity": t,
         "albedo": a
     }
-    sample_func, pdf_func = mi.chi2.EmitterAdapter("sunsky", sky)
+    sample_func, pdf_func = mi.chi2.EmitterAdapter(plugin, sky)
 
     test = mi.chi2.ChiSquareTest(
         domain=mi.chi2.SphericalDomain(),
@@ -106,7 +108,7 @@ def plot_pdf():
 
     # Compute coefficients
     sky = mi.load_dict({
-        "type": "sunsky",
+        "type": plugin,
         "sun_direction": [cp * st, sp * st, ct],
         "turbidity": t,
         "albedo": a
@@ -154,7 +156,7 @@ def plot_pdf():
     axes[0][1].axis('off')
     axes[0][1].set_title("tGMM PDF")
 
-    axes[1][0].imshow(relative_error, vmin=0, vmax=1, interpolation="nearest")
+    axes[1][0].imshow(relative_error, interpolation="nearest")
     axes[1][0].axis('off')
     axes[1][0].set_title("Relative error")
 
@@ -263,7 +265,7 @@ def test_render(render_shape, t, a, eta, wavelengths=None):
 
     # Compute coefficients
     sky = mi.load_dict({
-        "type": "sunsky",
+        "type": plugin,
         "sun_direction": [cp_sun * st, sp_sun * st, ct],
         "turbidity": t,
         "albedo": a
@@ -320,7 +322,7 @@ if __name__ == "__main__":
     #test_mean_radiance_data()
     #test_radiance_data()
 
-    #plot_pdf()
+    plot_pdf()
     test_chi2_emitter()
 
     #test_plot_spectral()
