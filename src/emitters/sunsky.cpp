@@ -409,7 +409,7 @@ private:
 
         std::vector<ScalarFloat> mis_weights(4 * NB_GAUSSIAN);
         for (size_t gaussian_idx = 0; gaussian_idx < 4 * NB_GAUSSIAN; ++gaussian_idx)
-            mis_weights[gaussian_idx] = m_tgmm_tables[gaussian_idx * NB_GAUSSIAN_PARAMS + 4];
+            mis_weights[gaussian_idx] = distrib_params[gaussian_idx * NB_GAUSSIAN_PARAMS + 4];
 
         m_gaussians = dr::load<FloatStorage>(distrib_params.data(), distrib_params.size());
         m_gaussian_distr = DiscreteDistribution<Float>(mis_weights.data(), mis_weights.size());
