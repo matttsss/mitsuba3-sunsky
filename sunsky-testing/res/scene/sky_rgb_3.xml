@@ -4,7 +4,7 @@
 
     <sensor type="spherical">
         <sampler type="independent">
-            <integer name="sampleCount" value="1"/>
+            <integer name="sampleCount" value="128"/>
         </sampler>
 
         <film type="hdrfilm">

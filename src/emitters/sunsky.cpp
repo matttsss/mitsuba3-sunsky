@@ -1,10 +1,12 @@
 #include <mitsuba/core/bsphere.h>
-#include <mitsuba/core/fresolver.h>
 #include <mitsuba/core/properties.h>
 #include <mitsuba/core/warp.h>
 #include <mitsuba/render/emitter.h>
 #include <mitsuba/render/scene.h>
-#include <mitsuba/render/sunsky.h>
+
+#include <mitsuba/render/sunsky/sun_model.h>
+#include <mitsuba/render/sunsky/sky_model.h>
+#include <mitsuba/render/sunsky/sunsky_io.h>
 
 NAMESPACE_BEGIN(mitsuba)
 
@@ -73,6 +75,8 @@ public:
            about the scene and default to the unit bounding sphere. */
         m_bsphere = BoundingSphere3f(ScalarPoint3f(0.f), 1.f);
         m_surface_area = 4.f * dr::Pi<Float>;
+
+        m_d65 = Texture::D65(1.f);
 
         // ================ GET TURBIDITY ===============
         ScalarFloat turbidity = props.get<ScalarFloat>("turbidity", 3.f);
@@ -156,8 +160,7 @@ public:
             // dr::width(idx) == 1
             SpecUInt32 idx = SpecUInt32({0, 1, 2});
 
-            // Normalize by sum of CIE Y value
-            return render_channels(idx, cos_theta, cos_gamma, active) / 106.856980;
+            return render_sky(idx, cos_theta, cos_gamma, active) * MI_CIE_Y_NORMALIZATION;
 
         } else {
             Spectrum normalized_wavelengths = (si.wavelengths - WAVELENGTHS[0]) / WAVELENGTH_STEP;
@@ -167,10 +170,9 @@ public:
             SpecMask spec_mask = active & (query_idx >= 0) & (query_idx < 11);
 
             return dr::lerp(
-                render_channels(query_idx, cos_theta, cos_gamma, spec_mask),
-                render_channels(dr::minimum(query_idx + 1, NB_CHANNELS - 1), cos_theta, cos_gamma, spec_mask),
-                lerp_factor);
-
+                render_sky(query_idx, cos_theta, cos_gamma, spec_mask),
+                render_sky(dr::minimum(query_idx + 1, NB_CHANNELS - 1), cos_theta, cos_gamma, spec_mask),
+                lerp_factor) / m_d65->eval(si, active);
         }
     }
 
@@ -243,10 +245,14 @@ private:
         "ssm_dataset_v2_spec" :
         "ssm_dataset_v2_rgb";
 
+    static constexpr size_t WAVELENGTH_STEP = 40;
+    static constexpr size_t WAVELENGTHS[11] = {
+        320, 360, 400, 420, 460, 520, 560, 600, 640, 680, 720
+    };
+
     static constexpr size_t NB_CHANNELS = is_spectral_v<Spectrum> ? 11 : 3,
                             DATASET_SIZE = NB_TURBIDITY * NB_ALBEDO * NB_CTRL_PTS * NB_CHANNELS * NB_PARAMS,
-                            RAD_DATASET_SIZE = NB_TURBIDITY * NB_ALBEDO * NB_CTRL_PTS * NB_CHANNELS,
-                            WAVELENGTH_STEP = 40;
+                            RAD_DATASET_SIZE = NB_TURBIDITY * NB_ALBEDO * NB_CTRL_PTS * NB_CHANNELS;
 
     Float m_surface_area;
     BoundingSphere3f m_bsphere;
@@ -255,6 +261,8 @@ private:
 
     Float m_sun_phi;
     Vector3f m_local_sun_dir;
+
+    ref<Texture> m_d65;
 
     // Radiance parameters
     FloatStorage m_params;
@@ -265,23 +273,19 @@ private:
     FloatStorage m_gaussians;
     DiscreteDistribution<Float> m_gaussian_distr;
 
-    // Permanent datasets loaded from files
+    // Permanent datasets loaded from files/memory
     std::vector<ScalarFloat> m_dataset;
     std::vector<ScalarFloat> m_rad_dataset;
     std::vector<ScalarFloat> m_tgmm_tables;
+    SunParameters<ScalarFloat> m_sun_params;
 
 
-    static constexpr size_t WAVELENGTHS[11] = {
-        320, 360, 400, 420, 460, 520, 560, 600, 640, 680, 720
-    };
-
-
-    Spectrum render_channels(const SpecUInt32& idx,
+    Spectrum render_sky(const SpecUInt32& channel_idx,
         const Float& cos_theta, const Float& cos_gamma, const SpecMask& active) const {
 
         Spectrum coefs[NB_PARAMS];
         for (uint8_t i = 0; i < NB_PARAMS; ++i)
-            coefs[i] = dr::gather<Spectrum>(m_params, idx * NB_PARAMS + i, active);
+            coefs[i] = dr::gather<Spectrum>(m_params, channel_idx * NB_PARAMS + i, active);
 
         Float gamma = dr::acos(cos_gamma),
               cos_gamma_sqr = dr::square(cos_gamma);
@@ -290,7 +294,7 @@ private:
         Spectrum chi = (1 + cos_gamma_sqr) / dr::pow(1 + dr::square(coefs[8]) - 2 * coefs[8] * cos_gamma, 1.5);
         Spectrum c2 = coefs[2] + coefs[3] * dr::exp(coefs[4] * gamma) + coefs[5] * cos_gamma_sqr + coefs[6] * chi + coefs[7] * dr::safe_sqrt(cos_theta);
 
-        return c1 * c2 * dr::gather<Spectrum>(m_sky_radiance, idx, active);
+        return c1 * c2 * dr::gather<Spectrum>(m_sky_radiance, channel_idx, active);
     }
 
     MI_INLINE Point2f gaussian_cdf(const Point2f& mu, const Point2f& sigma, const Point2f& x) const {
@@ -306,7 +310,7 @@ private:
         angles.x() = dr::select(angles.x() < 0, angles.x() + dr::TwoPi<Float>, angles.x());
 
         // Bounds check for theta
-        active &= (angles.y() > 0) & (angles.y() <= 0.5f * dr::Pi<Float>);
+        active &= (angles.y() > 0) && (angles.y() <= 0.5f * dr::Pi<Float>);
 
         const Point2f a = { 0.0 },
                       b = { dr::TwoPi<Float>, 0.5f * dr::Pi<Float> };
@@ -358,7 +362,7 @@ private:
     }
 
     void update_sun_radiance(ScalarFloat sun_theta, ScalarFloat turbidity) {
-        std::vector<ScalarFloat> sun_radiance = compute_sun_radiance(sun_theta, turbidity);
+        std::vector<ScalarFloat> sun_radiance = compute_sun_radiance(m_sun_params, sun_theta, turbidity);
         m_sun_radiance = dr::load<FloatStorage>(sun_radiance.data(), sun_radiance.size());
 
         dr::make_opaque(m_sun_radiance);
@@ -395,17 +399,17 @@ private:
             t_rem * eta_rem
         };
         std::vector<ScalarFloat> distrib_params(4 * eta_block_size);
-        for (size_t i = 0; i < 4; ++i) {
-            for (size_t j = 0; j < eta_block_size; ++j) {
-                ScalarUInt32 index = i * eta_block_size + j;
-                distrib_params[index] = m_tgmm_tables[indices[i] + j];
-                distrib_params[index] *= index % NB_GAUSSIAN_PARAMS == 4 ? lerp_factors[i] : 1;
+        for (size_t mixture_idx = 0; mixture_idx < 4; ++mixture_idx) {
+            for (size_t param_idx = 0; param_idx < eta_block_size; ++param_idx) {
+                ScalarUInt32 index = mixture_idx * eta_block_size + param_idx;
+                distrib_params[index] = m_tgmm_tables[indices[mixture_idx] + param_idx];
+                distrib_params[index] *= index % NB_GAUSSIAN_PARAMS == 4 ? lerp_factors[mixture_idx] : 1;
             }
         }
 
         std::vector<ScalarFloat> mis_weights(4 * NB_GAUSSIAN);
-        for (size_t i = 0; i < 4 * NB_GAUSSIAN; ++i)
-            mis_weights[i] = m_tgmm_tables[i * NB_GAUSSIAN_PARAMS + 4];
+        for (size_t gaussian_idx = 0; gaussian_idx < 4 * NB_GAUSSIAN; ++gaussian_idx)
+            mis_weights[gaussian_idx] = m_tgmm_tables[gaussian_idx * NB_GAUSSIAN_PARAMS + 4];
 
         m_gaussians = dr::load<FloatStorage>(distrib_params.data(), distrib_params.size());
         m_gaussian_distr = DiscreteDistribution<Float>(mis_weights.data(), mis_weights.size());
@@ -423,62 +427,6 @@ private:
         m_sky_radiance = dr::load<FloatStorage>(radiance.data(), radiance.size());
 
         dr::make_opaque(m_params, m_sky_radiance);
-    }
-
-    std::vector<ScalarFloat> compute_radiance_params(
-        const std::vector<ScalarFloat>& dataset,
-        const Albedo& albedo,
-        ScalarFloat turbidity, ScalarFloat eta) const {
-
-        turbidity = dr::clip(turbidity, 1.f, NB_TURBIDITY);
-        eta = dr::clip(eta, 0.f, 0.5f * dr::Pi<ScalarFloat>);
-
-        ScalarFloat x = dr::pow(2 * dr::InvPi<ScalarFloat> * eta, 1.f/3.f);
-
-        ScalarUInt32 t_int = dr::floor2int<ScalarUInt32>(turbidity),
-                     t_low = dr::maximum(t_int - 1, 0),
-                     t_high = dr::minimum(t_low + 1, NB_TURBIDITY - 1);
-
-        ScalarFloat t_rem = turbidity - t_int;
-
-        const size_t t_block_size = dataset.size() / NB_TURBIDITY,
-                     a_block_size = t_block_size / NB_ALBEDO,
-                     ctrl_block_size = a_block_size / NB_CTRL_PTS,
-                     inner_block_size = ctrl_block_size / NB_CHANNELS;
-
-        std::vector<ScalarFloat>
-            t_low_a_low = bezier_interpolate(dataset, ctrl_block_size, t_low * t_block_size + 0 * a_block_size, x),
-            t_high_a_low = bezier_interpolate(dataset, ctrl_block_size, t_high * t_block_size + 0 * a_block_size, x),
-            t_low_a_high = bezier_interpolate(dataset, ctrl_block_size, t_low * t_block_size + 1 * a_block_size, x),
-            t_high_a_high = bezier_interpolate(dataset, ctrl_block_size, t_high * t_block_size + 1 * a_block_size, x);
-
-        std::vector<ScalarFloat>
-            res_a_low = lerp_vectors(t_low_a_low, t_high_a_low, t_rem),
-            res_a_high = lerp_vectors(t_low_a_high, t_high_a_high, t_rem);
-
-        std::vector<ScalarFloat> res(ctrl_block_size);
-        for (size_t i = 0; i < ctrl_block_size; ++i)
-            res[i] = dr::lerp(res_a_low[i], res_a_high[i], albedo[i/inner_block_size]);
-
-        return res;
-    }
-
-    std::vector<ScalarFloat> bezier_interpolate(
-    const std::vector<ScalarFloat>& dataset, size_t out_size,
-    const ScalarUInt32& offset, const ScalarFloat& x) const {
-
-        constexpr ScalarFloat coefs[NB_CTRL_PTS] =
-            {1, 5, 10, 10, 5, 1};
-
-        std::vector<ScalarFloat> res(out_size, 0.0f);
-        for (size_t i = 0; i < NB_CTRL_PTS; ++i) {
-            ScalarFloat coef = coefs[i] * dr::pow(1 - x, 5 - i) * dr::pow(x, i);
-            ScalarUInt32 index = offset + i * out_size;
-            for (size_t j = 0; j < out_size; ++j)
-                res[j] += coef * dataset[index + j];
-        }
-
-        return res;
     }
 
     static auto extract_albedo(const ref<Texture>& albedo) {

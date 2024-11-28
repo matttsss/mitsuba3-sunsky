@@ -5,7 +5,7 @@ import drjit as dr
 import mitsuba as mi
 import matplotlib.pyplot as plt
 
-mi.set_variant("cuda_rgb")
+mi.set_variant("llvm_rgb")
 
 from rendering.sunsky_plugin import SunskyEmitter
 from helpers import get_north_hemisphere_rays, get_spherical_rays
@@ -72,7 +72,7 @@ def test_get_tgmm_table():
 
 def test_chi2_emitter():
     t, a = 6, 0.5
-    eta = dr.deg2rad(15.2)
+    eta = dr.deg2rad(50.2)
     phi_sun = -4*dr.pi/5
 
     sp_sun, cp_sun = dr.sincos(phi_sun)
@@ -92,6 +92,7 @@ def test_chi2_emitter():
         pdf_func= pdf_func,
         sample_func= sample_func,
         sample_dim=2,
+        sample_count=1000000000,
         res=300,
         ires=32
     )
@@ -99,10 +100,10 @@ def test_chi2_emitter():
     assert test.run()
 
 def plot_pdf():
-    a, t, eta = 0.5, 6.1, dr.deg2rad(54.3)
+    a, t, eta = 0.5, 6, dr.deg2rad(50.2)
     render_shape = (1024//4, 1024)
 
-    phi_sun = dr.pi/2
+    phi_sun = -4*dr.pi/5
     sp, cp = dr.sincos(phi_sun)
     st, ct = dr.sincos(dr.pi/2 - eta)
 
@@ -315,14 +316,14 @@ def test_plot_spectral():
 
 
 if __name__ == "__main__":
-    #mi.write_sky_model_data_v2("sunsky-testing/res/datasets/ssm_dataset")
+    mi.write_sky_model_data_v2("sunsky-testing/res/datasets/ssm_dataset")
 
     #test_gmm_values()
     #test_get_tgmm_table()
     #test_mean_radiance_data()
     #test_radiance_data()
 
-    #plot_pdf()
+    plot_pdf()
     test_chi2_emitter()
 
     #test_plot_spectral()

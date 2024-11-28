@@ -60,22 +60,20 @@ class SunskyEmitter(mi.Emitter):
         self.to_world = props.get("to_world", mi.Transform4f(1))
         self.m_local_sun = dr.normalize(self.to_world.inverse() @ props.get("sun_direction"))
 
-        cos_phi = mi.Frame3f.cos_phi(self.m_local_sun)
-        sin_phi = mi.Frame3f.sin_phi(self.m_local_sun)
 
-        self.sun_phi = dr.acos(cos_phi)
-        self.sun_phi = dr.select(sin_phi >= 0, self.sun_phi, dr.two_pi - self.sun_phi)
+        self.sun_phi = dr.acos(mi.Frame3f.cos_phi(self.m_local_sun))
+        self.sun_phi = dr.select(self.sun_phi >= 0, self.sun_phi, dr.two_pi + self.sun_phi)
 
         sun_eta = dr.pi / 2 - dr.acos(mi.Frame3f.cos_theta(self.m_local_sun))
 
         # Get luminance parameters
-        _, database = mi.array_from_file_d(dataset_name + ".bin")
-        _, database_rad = mi.array_from_file_d(dataset_name + "_rad.bin")
+        database = mi.Float(mi.array_from_file_d(dataset_name + ".bin"))
+        database_rad = mi.Float(mi.array_from_file_d(dataset_name + "_rad.bin"))
         self.m_params = get_params(database, turb, albedo, sun_eta)
         self.m_rad = get_params(database_rad, turb, albedo, sun_eta)
 
         # Get sampling parameters
-        _, tgmm_tables = mi.array_from_file_f("sunsky-testing/res/datasets/tgmm_tables.bin")
+        tgmm_tables = mi.Float(mi.array_from_file_f("sunsky-testing/res/datasets/tgmm_tables.bin"))
         mis_weights, self.gaussians = get_tgmm_table(tgmm_tables, turb, sun_eta)
 
         self.gaussian_dist = mi.DiscreteDistribution(mis_weights)

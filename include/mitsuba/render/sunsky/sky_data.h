@@ -75,7 +75,7 @@ space version of the model.
 // ================== SUN MODEL DATA ==================
 
 // k_o Spectrum table from pg 127, MI.
-double k_oWavelengths[64] = {
+float k_oWavelengths[64] = {
     300, 305, 310, 315, 320, 325, 330, 335, 340, 345,
     350, 355, 445, 450, 455, 460, 465, 470, 475, 480,
     485, 490, 495, 500, 505, 510, 515, 520, 525, 530,
@@ -85,7 +85,7 @@ double k_oWavelengths[64] = {
     760, 770, 780, 790
 };
 
-double k_oAmplitudes[65] = {
+float k_oAmplitudes[65] = {
     10.0, 4.8, 2.7, 1.35, .8, .380, .160, .075, .04, .019, .007,
     .0, .003, .003, .004, .006, .008, .009, .012, .014, .017,
     .021, .025, .03, .035, .04, .045, .048, .057, .063, .07,
@@ -96,22 +96,22 @@ double k_oAmplitudes[65] = {
 };
 
 // k_g Spectrum table from pg 130, MI.
-double k_gWavelengths[4] = {
+float k_gWavelengths[4] = {
     759, 760, 770, 771
 };
 
-double k_gAmplitudes[4] = {
+float k_gAmplitudes[4] = {
     0, 3.0, 0.210, 0
 };
 
 // k_wa Spectrum table from pg 130, MI.
-double k_waWavelengths[13] = {
+float k_waWavelengths[13] = {
     689, 690, 700, 710, 720,
     730, 740, 750, 760, 770,
     780, 790, 800
 };
 
-double k_waAmplitudes[13] = {
+float k_waAmplitudes[13] = {
     0, 0.160e-1, 0.240e-1, 0.125e-1,
     0.100e+1, 0.870, 0.610e-1, 0.100e-2,
     0.100e-4, 0.100e-4, 0.600e-3,
@@ -119,7 +119,7 @@ double k_waAmplitudes[13] = {
 };
 
 /* Wavelengths corresponding to the table below */
-double solWavelengths[38] = {
+float solWavelengths[38] = {
     380, 390, 400, 410, 420, 430, 440, 450,
     460, 470, 480, 490, 500, 510, 520, 530,
     540, 550, 560, 570, 580, 590, 600, 610,
@@ -128,7 +128,7 @@ double solWavelengths[38] = {
 };
 
 /* Solar amplitude in watts / (m^2 * nm * sr) */
-double solAmplitudes[38] = {
+float solAmplitudes[38] = {
     16559.0, 16233.7, 21127.5, 25888.2, 25829.1,
     24232.3, 26760.5, 29658.3, 30545.4, 30057.5,
     30663.7, 28830.4, 28712.1, 27825.0, 27100.6,
