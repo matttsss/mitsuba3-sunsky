@@ -73,7 +73,7 @@ def test_get_tgmm_table():
 def test_chi2_emitter():
     t, a = 6, 0.5
     eta = dr.deg2rad(15.2)
-    phi_sun = dr.pi/2
+    phi_sun = -4*dr.pi/5
 
     sp_sun, cp_sun = dr.sincos(phi_sun)
     st, ct = dr.sincos(dr.pi/2 - eta)

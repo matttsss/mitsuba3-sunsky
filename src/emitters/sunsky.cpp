@@ -91,10 +91,7 @@ public:
             .transform_affine(props.get<ScalarVector3f>("sun_direction")));
 
         ScalarFloat sun_phi = dr::atan2(local_sun_dir.y(), local_sun_dir.x());
-        sun_phi = dr::select(
-            ScalarFrame3f::sin_phi(local_sun_dir) >= 0,
-            sun_phi,
-            dr::TwoPi<Float> - sun_phi);
+        sun_phi = dr::select(sun_phi >= 0, sun_phi, sun_phi + dr::TwoPi<Float>);
 
         ScalarFloat sun_theta = dr::unit_angle_z(local_sun_dir),
                     sun_eta = 0.5f * dr::Pi<ScalarFloat> - sun_theta;
@@ -159,7 +156,7 @@ public:
             // dr::width(idx) == 1
             SpecUInt32 idx = SpecUInt32({0, 1, 2});
 
-            // Divide by Sum of CIE Y value
+            // Normalize by sum of CIE Y value
             return render_channels(idx, cos_theta, cos_gamma, active) / 106.856980;
 
         } else {
@@ -304,8 +301,8 @@ private:
 
         Point2f angles = from_spherical(direction);
 
-        // Adjust angle for sun position
-        angles.x() += 0.5f * dr::Pi<Float> - m_sun_phi;
+        // From local frame to reference frame where sun_phi = pi/2
+        angles.x() -= m_sun_phi - 0.5f * dr::Pi<Float>;
         angles.x() = dr::select(angles.x() < 0, angles.x() + dr::TwoPi<Float>, angles.x());
 
         // Bounds check for theta
@@ -336,9 +333,9 @@ private:
     }
 
     Vector3f tgmm_sample(const Point2f& sample_, const Mask& active) const {
-        UInt32 idx;
-        Point2f sample = sample_;
-        std::tie(idx, sample.x()) = m_gaussian_distr.sample_reuse(sample.x(), active);
+        auto [idx, temp_sample] = m_gaussian_distr.sample_reuse(sample_.x(), active);
+
+        Point2f sample = {temp_sample, sample_.y()};
 
         Gaussian gaussian = dr::gather<Gaussian>(m_gaussians, idx, active);
 
@@ -353,27 +350,11 @@ private:
 
         sample = dr::fmadd(cdf_b - cdf_a, sample, cdf_a);
         Point2f res = dr::SqrtTwo<Float> * dr::erfinv(2 * sample - 1) * sigma + mu;
-        res.x() += 0.5f * dr::Pi<Float> - m_sun_phi;
+
+        // From fixed reference frame where sun_phi = pi/2 to local frame
+        res.x() += m_sun_phi - 0.5f * dr::Pi<Float>;
 
         return to_spherical(res);
-    }
-
-    std::vector<ScalarFloat> bezier_interpolate(
-        const std::vector<ScalarFloat>& dataset, size_t out_size,
-        const ScalarUInt32& offset, const ScalarFloat& x) const {
-
-        constexpr ScalarFloat coefs[NB_CTRL_PTS] =
-            {1, 5, 10, 10, 5, 1};
-
-        std::vector<ScalarFloat> res(out_size, 0.0f);
-        for (size_t i = 0; i < NB_CTRL_PTS; ++i) {
-            ScalarFloat coef = coefs[i] * dr::pow(1 - x, 5 - i) * dr::pow(x, i);
-            ScalarUInt32 index = offset + i * out_size;
-            for (size_t j = 0; j < out_size; ++j)
-                res[j] += coef * dataset[index + j];
-        }
-
-        return res;
     }
 
     void update_sun_radiance(ScalarFloat sun_theta, ScalarFloat turbidity) {
@@ -478,6 +459,24 @@ private:
         std::vector<ScalarFloat> res(ctrl_block_size);
         for (size_t i = 0; i < ctrl_block_size; ++i)
             res[i] = dr::lerp(res_a_low[i], res_a_high[i], albedo[i/inner_block_size]);
+
+        return res;
+    }
+
+    std::vector<ScalarFloat> bezier_interpolate(
+    const std::vector<ScalarFloat>& dataset, size_t out_size,
+    const ScalarUInt32& offset, const ScalarFloat& x) const {
+
+        constexpr ScalarFloat coefs[NB_CTRL_PTS] =
+            {1, 5, 10, 10, 5, 1};
+
+        std::vector<ScalarFloat> res(out_size, 0.0f);
+        for (size_t i = 0; i < NB_CTRL_PTS; ++i) {
+            ScalarFloat coef = coefs[i] * dr::pow(1 - x, 5 - i) * dr::pow(x, i);
+            ScalarUInt32 index = offset + i * out_size;
+            for (size_t j = 0; j < out_size; ++j)
+                res[j] += coef * dataset[index + j];
+        }
 
         return res;
     }

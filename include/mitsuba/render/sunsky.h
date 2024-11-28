@@ -160,7 +160,7 @@ NAMESPACE_BEGIN(mitsuba)
             elevation += (EARTH_MEAN_RADIUS / ASTRONOMICAL_UNIT) * dr::sin(elevation);
         }
 
-        return from_spherical(Point<Float, 2>(azimuth, elevation));
+        return from_spherical(Point<dr::value_t<Float>, 2>(azimuth, elevation));
     }
 
     template <uint32_t arraySize, typename ScalarFloat>
