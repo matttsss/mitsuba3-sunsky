@@ -6,7 +6,6 @@
 #include <mitsuba/core/logger.h>
 #include <mitsuba/core/distr_1d.h>
 
-#include <drjit/dynamic.h>
 #include <drjit/sphere.h>
 
 #include "sky_data.h"

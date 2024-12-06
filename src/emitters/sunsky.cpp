@@ -65,8 +65,13 @@ public:
     MI_IMPORT_TYPES(Scene, Shape, Texture)
 
     using FloatStorage = DynamicBuffer<Float>;
+
     using Gaussian = dr::Array<Float, NB_GAUSSIAN_PARAMS>;
     using Albedo = std::array<ScalarFloat, is_spectral_v<Spectrum> ? 11 : 3>;
+    using SolarRadiance = std::conditional_t<is_spectral_v<Spectrum>,
+                                                ContinuousDistribution<Wavelength>,
+                                                Color3f>;
+
     using SpecUInt32 = dr::uint32_array_t<Spectrum>;
     using SpecMask = dr::mask_t<Spectrum>;
 
@@ -155,25 +160,27 @@ public:
 
         active &= cos_theta >= 0;
 
+        UnpolarizedSpectrum res = 0.f;
         if constexpr (is_rgb_v<Spectrum>) {
-
             // dr::width(idx) == 1
             SpecUInt32 idx = SpecUInt32({0, 1, 2});
 
-            return render_sky(idx, cos_theta, cos_gamma, active) * MI_CIE_Y_NORMALIZATION;
+            res = render_sky(idx, cos_theta, cos_gamma, active) * MI_CIE_Y_NORMALIZATION;
 
         } else {
             Spectrum normalized_wavelengths = (si.wavelengths - WAVELENGTHS[0]) / WAVELENGTH_STEP;
             SpecUInt32 query_idx = SpecUInt32(dr::floor(normalized_wavelengths));
             Spectrum lerp_factor = normalized_wavelengths - query_idx;
 
-            SpecMask spec_mask = active & (query_idx >= 0) & (query_idx < 11);
+            SpecMask spec_mask = active & (query_idx >= 0) & (query_idx < NB_CHANNELS);
 
-            return dr::lerp(
+            res = dr::lerp(
                 render_sky(query_idx, cos_theta, cos_gamma, spec_mask),
                 render_sky(dr::minimum(query_idx + 1, NB_CHANNELS - 1), cos_theta, cos_gamma, spec_mask),
-                lerp_factor) / m_d65->eval(si, active);
+                lerp_factor) * m_d65->eval(si, active); // TODO find correct constant
         }
+
+        return dr::select(active, res, 0.f);
     }
 
     std::pair<DirectionSample3f, Spectrum> sample_direction(const Interaction3f &it,
@@ -233,6 +240,7 @@ public:
         std::ostringstream oss;
         oss << "SunskyEmitter[" << std::endl
             << "  bsphere = " << string::indent(m_bsphere) << std::endl
+            << "  turbidity = " << string::indent(m_turbidity) << std::endl
             << "]";
         return oss.str();
     }
@@ -267,7 +275,7 @@ private:
     // Radiance parameters
     FloatStorage m_params;
     FloatStorage m_sky_radiance;
-    FloatStorage m_sun_radiance;
+    SolarRadiance m_sun_radiance;
 
     // Sampling parameters
     FloatStorage m_gaussians;
@@ -295,6 +303,16 @@ private:
         Spectrum c2 = coefs[2] + coefs[3] * dr::exp(coefs[4] * gamma) + coefs[5] * cos_gamma_sqr + coefs[6] * chi + coefs[7] * dr::safe_sqrt(cos_theta);
 
         return c1 * c2 * dr::gather<Spectrum>(m_sky_radiance, channel_idx, active);
+    }
+
+    Spectrum render_sun(const SurfaceInteraction3f& si, const Mask& active) const {
+        Spectrum sun_radiance = 0.f;
+        if constexpr (is_rgb_v<Spectrum>) {
+
+        } else {
+            sun_radiance = m_sun_radiance.eval_pdf(si.wavelengths, active);
+        }
+        return dr::select(active, sun_radiance, 0.f);
     }
 
     MI_INLINE Point2f gaussian_cdf(const Point2f& mu, const Point2f& sigma, const Point2f& x) const {
@@ -352,18 +370,38 @@ private:
         const Point2f cdf_a = gaussian_cdf(mu, sigma, a),
                       cdf_b = gaussian_cdf(mu, sigma, b);
 
-        sample = dr::fmadd(cdf_b - cdf_a, sample, cdf_a);
+        sample = dr::lerp(cdf_a, cdf_b, sample);
+        sample.y() = dr::clip(sample.y(), dr::Epsilon<Float>, 1.f - dr::Epsilon<Float>);
         Point2f res = dr::SqrtTwo<Float> * dr::erfinv(2 * sample - 1) * sigma + mu;
 
         // From fixed reference frame where sun_phi = pi/2 to local frame
         res.x() += m_sun_phi - 0.5f * dr::Pi<Float>;
 
-        return to_spherical(res);
+        return dr::normalize(to_spherical(res));
     }
 
     void update_sun_radiance(ScalarFloat sun_theta, ScalarFloat turbidity) {
         std::vector<ScalarFloat> sun_radiance = compute_sun_radiance(m_sun_params, sun_theta, turbidity);
-        m_sun_radiance = dr::load<FloatStorage>(sun_radiance.data(), sun_radiance.size());
+
+        if constexpr (is_spectral_v<Spectrum>) {
+            m_sun_radiance = SolarRadiance({350.f, 800.f},
+                                    sun_radiance.data(),
+                                    sun_radiance.size());
+
+        } else if constexpr (is_rgb_v<Spectrum>) {
+            FloatStorage value = dr::load<FloatStorage>(sun_radiance.data(), sun_radiance.size()),
+                         wavelengths = dr::load<FloatStorage>(solarWavelenghts, 91);
+
+            // Transform solar spectrum computed on 91 wavelengths to RGB
+            Color<FloatStorage, 3> rgb = linear_rgb_rec(wavelengths);
+            m_sun_radiance = { dr::mean(rgb.x() * value),
+                               dr::mean(rgb.y() * value),
+                               dr::mean(rgb.z() * value) };
+            m_sun_radiance *= MI_CIE_Y_NORMALIZATION;
+
+        } else {
+            Throw("Unsupported spectrum type");
+        }
 
         dr::make_opaque(m_sun_radiance);
     }
