@@ -9,13 +9,13 @@ mi.set_variant("cuda_rgb")
 from rendering.sunsky_plugin import SunskyEmitter
 
 def test_sampling():
-    #t, a = 6, 0.5
-    #eta = dr.deg2rad(50.2)
-    #phi_sun = -4*dr.pi/5
-
-    t, a = 3, 0.5
-    eta = dr.deg2rad(74)
+    t, a = 6, 0.5
+    eta = dr.deg2rad(50.2)
     phi_sun = -4*dr.pi/5
+
+    #t, a = 3, 0.5
+    #eta = dr.deg2rad(74)
+    #phi_sun = -4*dr.pi/5
 
     sp_sun, cp_sun = dr.sincos(phi_sun)
     st, ct = dr.sincos(dr.pi/2 - eta)
@@ -31,7 +31,7 @@ def test_sampling():
     sky_emitter = mi.load_dict(sky)
     it = dr.zeros(mi.Interaction3f)
 
-    nb_samples = 100_000_000
+    nb_samples = 500_000_000
 
     rng = mi.PCG32(size=2*nb_samples)
     samples = rng.next_float32()
@@ -57,7 +57,7 @@ def test_sampling():
         sample_func= sample_func,
         sample_dim=2,
         sample_count=nb_samples,
-        res=300,
+        res=301,
         ires=32
     )
 

@@ -180,6 +180,7 @@ public:
                 lerp_factor) * m_d65->eval(si, active); // TODO find correct constant
         }
 
+        res = dr::maximum(res, 0.f);
         return dr::select(active, res, 0.f);
     }
 
@@ -371,13 +372,14 @@ private:
                       cdf_b = gaussian_cdf(mu, sigma, b);
 
         sample = dr::lerp(cdf_a, cdf_b, sample);
-        sample.y() = dr::clip(sample.y(), dr::Epsilon<Float>, 1.f - dr::Epsilon<Float>);
-        Point2f res = dr::SqrtTwo<Float> * dr::erfinv(2 * sample - 1) * sigma + mu;
+        Point2f angles = dr::SqrtTwo<Float> * dr::erfinv(2 * sample - 1) * sigma + mu;
 
         // From fixed reference frame where sun_phi = pi/2 to local frame
-        res.x() += m_sun_phi - 0.5f * dr::Pi<Float>;
+        angles.x() += m_sun_phi - 0.5f * dr::Pi<Float>;
+        // Avoid negative z-values due to FP errors
+        angles.y() = dr::clip(angles.y(), dr::Epsilon<Float>, 0.5f * dr::Pi<Float> - dr::Epsilon<Float>);
 
-        return dr::normalize(to_spherical(res));
+        return to_spherical(angles);
     }
 
     void update_sun_radiance(ScalarFloat sun_theta, ScalarFloat turbidity) {

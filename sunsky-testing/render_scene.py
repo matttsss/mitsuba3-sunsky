@@ -3,12 +3,10 @@ sys.path.insert(0, "build/python")
 
 import drjit as dr
 import mitsuba as mi
-mi.set_variant("cuda_spectral")
-
-dr.set_log_level(dr.LogLevel.Warn)
-from rendering.spherical_sensor import SphericalSensor
 
 def render_scene(t, a, eta, phi_sun):
+    from rendering.spherical_sensor import SphericalSensor
+
     dr.print("Rendering test scene")
 
     sp, cp = dr.sincos(phi_sun)
@@ -22,7 +20,7 @@ def render_scene(t, a, eta, phi_sun):
             'type': 'spherical',
             'sampler': {
                 'type': 'independent',
-                'sample_count': 128
+                'sample_count': 512
             },
             'film': {
                 'type': 'hdrfilm',
@@ -39,13 +37,13 @@ def render_scene(t, a, eta, phi_sun):
     }
 
     scene = mi.load_dict(scene)
-    return mi.render(scene, spp=128)
+    return mi.render(scene, spp=512)
 
 
 
 def render_and_write_scene(scene_name):
-    t, a = 1.2, 0.5
-    eta = dr.deg2rad(80)
+    t, a = 2.5, 0.0
+    eta = dr.deg2rad(22.5)
     phi_sun = -4*dr.pi/5
     image = render_scene(t, a, eta, phi_sun)
 
@@ -53,4 +51,6 @@ def render_and_write_scene(scene_name):
     mi.util.write_bitmap(f"sunsky-testing/res/renders/{scene_name}.exr", image)
 
 if __name__ == "__main__":
-    render_and_write_scene("sky_rgb_3")
+    mi.set_variant("llvm_spectral")
+    dr.set_log_level(dr.LogLevel.Warn)
+    render_and_write_scene("sky_spec_3")
