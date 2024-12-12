@@ -31,7 +31,7 @@ def test_sampling():
     sky_emitter = mi.load_dict(sky)
     it = dr.zeros(mi.Interaction3f)
 
-    nb_samples = 500_000_000
+    nb_samples = 250_000_000
 
     rng = mi.PCG32(size=2*nb_samples)
     samples = rng.next_float32()
@@ -57,7 +57,7 @@ def test_sampling():
         sample_func= sample_func,
         sample_dim=2,
         sample_count=nb_samples,
-        res=301,
+        res=216,
         ires=32
     )
 

@@ -10,6 +10,7 @@
 
 #include "sky_data.h"
 
+#define SUN_APP_RADIUS 0.5358
 #define EARTH_MEAN_RADIUS 6371.01   // In km
 #define ASTRONOMICAL_UNIT 149597890 // In km
 

@@ -99,6 +99,8 @@ public:
             m_to_world.scalar().inverse()
             .transform_affine(props.get<ScalarVector3f>("sun_direction")));
 
+        m_local_sun_frame = Frame3f(local_sun_dir);
+
         ScalarFloat sun_phi = dr::atan2(local_sun_dir.y(), local_sun_dir.x());
         sun_phi = dr::select(sun_phi >= 0, sun_phi, sun_phi + dr::TwoPi<Float>);
 
@@ -177,38 +179,56 @@ public:
             res = dr::lerp(
                 render_sky(query_idx, cos_theta, cos_gamma, spec_mask),
                 render_sky(dr::minimum(query_idx + 1, NB_CHANNELS - 1), cos_theta, cos_gamma, spec_mask),
-                lerp_factor) * m_d65->eval(si, active); // TODO find correct constant
+                lerp_factor) * m_d65->eval(si, active) * 465.382521163; // FIXME: explain this factor
         }
 
-        res = dr::maximum(res, 0.f);
-        return dr::select(active, res, 0.f);
+        res *= m_sky_scale;
+        res += m_sun_scale * render_sun(cos_gamma, si.wavelengths, active);
+        return dr::select(active & (res >= 0.f), res, 0.f);
     }
+
+    std::pair<Vector3f, Float> sample_sun(const Point2f& sample) const {
+        Vector3f sun_sample = warp::square_to_uniform_cone(sample, m_sun_cos_cutoff);
+        sun_sample = m_local_sun_frame.to_world(sun_sample);
+
+        return {
+            sun_sample, warp::square_to_uniform_cone_pdf(sun_sample, m_sun_cos_cutoff)
+        };
+    }
+
+    std::pair<Vector3f, Float> sample_sky(const Point2f& sample, const Mask& active) const {
+        Vector3f sky_sample = tgmm_sample(sample, active);
+        return {
+            sky_sample, tgmm_pdf(sky_sample, active)
+        };
+    }
+
 
     std::pair<DirectionSample3f, Spectrum> sample_direction(const Interaction3f &it,
                                                             const Point2f &sample,
                                                             Mask active) const override {
         MI_MASKED_FUNCTION(ProfilerPhase::EndpointSampleDirection, active);
 
-        Vector3f local_dir = tgmm_sample(sample, active);
-        Float inv_sin_theta = dr::safe_rsqrt(dr::maximum(
-            dr::square(local_dir.x()) + dr::square(local_dir.y()),
-            dr::square(dr::Epsilon<Float>)));
+        ScalarFloat boundary = m_sky_scale / (m_sky_scale + m_sun_scale);
+        auto [sample_dir, pdf] = dr::select(
+                sample.x() < boundary,
+                sample_sky({sample.x() / boundary, sample.y()}, active),
+                sample_sun({(sample.x() - boundary) / (1 - boundary), sample.y()})
+        );
 
-
-        Float pdf = tgmm_pdf(local_dir, active) * inv_sin_theta;
-        active &= pdf > 0;
+        pdf = dr::select(sample_dir.z() < 0.f, 0.f, pdf * inv_sin_theta(sample_dir));
 
         // Automatically enlarge the bounding sphere when it does not contain the reference point
         Float radius = dr::maximum(m_bsphere.radius, dr::norm(it.p - m_bsphere.center)),
               dist   = 2.f * radius;
 
-        Vector3f d = m_to_world.value().transform_affine(local_dir);
+        Vector3f d = m_to_world.value().transform_affine(sample_dir);
         DirectionSample3f ds;
         ds.p       = dr::fmadd(d, dist, it.p);
         ds.n       = -d;
         ds.uv      = sample;
         ds.time    = it.time;
-        ds.pdf     = dr::select(active, pdf, 0);
+        ds.pdf     = pdf;
         ds.delta   = false;
         ds.emitter = this;
         ds.d       = d;
@@ -225,11 +245,11 @@ public:
         MI_MASKED_FUNCTION(ProfilerPhase::EndpointEvaluate, active);
 
         Vector3f local_dir = dr::normalize(m_to_world.value().inverse().transform_affine(ds.d));
-        Float inv_sin_theta = dr::safe_rsqrt(dr::maximum(
-            dr::square(local_dir.x()) + dr::square(local_dir.y()),
-            dr::square(dr::Epsilon<Float>)));
 
-        return tgmm_pdf(local_dir, active) * inv_sin_theta;
+        Float sun_pdf = warp::square_to_uniform_cone_pdf(m_local_sun_frame.to_local(local_dir), m_sun_cos_cutoff);
+        Float sky_pdf = tgmm_pdf(local_dir, active);
+
+        return inv_sin_theta(local_dir) * (m_sky_scale * sky_pdf + m_sun_scale * sun_pdf) / (m_sky_scale + m_sun_scale);
     }
 
     /// This emitter does not occupy any particular region of space, return an invalid bounding box
@@ -255,7 +275,7 @@ private:
         "ssm_dataset_v2_rgb";
 
     static constexpr size_t WAVELENGTH_STEP = 40;
-    static constexpr size_t WAVELENGTHS[11] = {
+    static constexpr ScalarFloat WAVELENGTHS[11] = {
         320, 360, 400, 420, 460, 520, 560, 600, 640, 680, 720
     };
 
@@ -267,9 +287,13 @@ private:
     BoundingSphere3f m_bsphere;
 
     Float m_turbidity;
+    ScalarFloat m_sky_scale = 1.f;
+    ScalarFloat m_sun_scale = 0.f;
 
     Float m_sun_phi;
     Vector3f m_local_sun_dir;
+    Frame3f m_local_sun_frame;
+    Float m_sun_cos_cutoff = dr::cos(dr::deg_to_rad((ScalarFloat) (SUN_APP_RADIUS * 0.5)));
 
     ref<Texture> m_d65;
 
@@ -306,14 +330,23 @@ private:
         return c1 * c2 * dr::gather<Spectrum>(m_sky_radiance, channel_idx, active);
     }
 
-    Spectrum render_sun(const SurfaceInteraction3f& si, const Mask& active) const {
-        Spectrum sun_radiance = 0.f;
-        if constexpr (is_rgb_v<Spectrum>) {
+    Spectrum render_sun(const Float& cos_gamma, const Wavelength& wavelengths, const Mask& active) const {
+        Mask hit_sun = cos_gamma >= dr::cos(dr::deg_to_rad((ScalarFloat) (SUN_APP_RADIUS * 0.5)));
 
-        } else {
-            sun_radiance = m_sun_radiance.eval_pdf(si.wavelengths, active);
-        }
-        return dr::select(active, sun_radiance, 0.f);
+        Spectrum sun_radiance = 0.f;
+        if constexpr (is_rgb_v<Spectrum>)
+            sun_radiance = m_sun_radiance;
+        else
+            sun_radiance = m_sun_radiance.eval_pdf(wavelengths, active);
+
+        return dr::select(active & hit_sun, sun_radiance, 0.f);
+    }
+
+    MI_INLINE Float inv_sin_theta(const Vector3f& local_dir) const {
+        return dr::safe_rsqrt(dr::maximum(
+            dr::square(local_dir.x()) + dr::square(local_dir.y()),
+            dr::square(dr::Epsilon<Float>))
+        );
     }
 
     MI_INLINE Point2f gaussian_cdf(const Point2f& mu, const Point2f& sigma, const Point2f& x) const {
@@ -373,17 +406,21 @@ private:
 
         sample = dr::lerp(cdf_a, cdf_b, sample);
         Point2f angles = dr::SqrtTwo<Float> * dr::erfinv(2 * sample - 1) * sigma + mu;
-
         // From fixed reference frame where sun_phi = pi/2 to local frame
         angles.x() += m_sun_phi - 0.5f * dr::Pi<Float>;
-        // Avoid negative z-values due to FP errors
-        angles.y() = dr::clip(angles.y(), dr::Epsilon<Float>, 0.5f * dr::Pi<Float> - dr::Epsilon<Float>);
 
-        return to_spherical(angles);
+        return dr::normalize(to_spherical(angles));
     }
 
     void update_sun_radiance(ScalarFloat sun_theta, ScalarFloat turbidity) {
         std::vector<ScalarFloat> sun_radiance = compute_sun_radiance(m_sun_params, sun_theta, turbidity);
+
+        //ScalarFloat half_aperture = dr::deg_to_rad(SUN_APP_RADIUS * 0.5),
+        //            solid_angle = dr::TwoPi<Float> * (1 - dr::cos(half_aperture));
+
+        // TODO: no need to multiply with solid angles since we work with radiance?
+        // for (ScalarFloat& value : sun_radiance)
+        //     value *= solid_angle;
 
         if constexpr (is_spectral_v<Spectrum>) {
             m_sun_radiance = SolarRadiance({350.f, 800.f},
@@ -469,7 +506,7 @@ private:
         dr::make_opaque(m_params, m_sky_radiance);
     }
 
-    static auto extract_albedo(const ref<Texture>& albedo) {
+    Albedo extract_albedo(const ref<Texture>& albedo) const {
         Albedo albedo_buff = {};
         SurfaceInteraction3f si = dr::zeros<SurfaceInteraction3f>();
         if constexpr (!dr::is_array_v<Float> && is_rgb_v<Spectrum>) {
@@ -490,7 +527,7 @@ private:
 
 
         } else if constexpr (is_spectral_v<Spectrum>) {
-            FloatStorage wavelengths = dr::load<size_t>(WAVELENGTHS, NB_CHANNELS);
+            FloatStorage wavelengths = dr::load<FloatStorage>(WAVELENGTHS, NB_CHANNELS);
             si.wavelengths = wavelengths;
             Spectrum res = albedo->eval(si);
 
