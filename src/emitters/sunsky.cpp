@@ -47,15 +47,11 @@ geometry that uses basic (e.g. diffuse) materials.
 
  */
 
-#define NB_TURBIDITY 10
-#define NB_ALBEDO 2
-#define NB_CTRL_PTS 6
-#define NB_PARAMS 9
-
 #define NB_ETAS 30
 #define NB_GAUSSIAN 5
 #define NB_GAUSSIAN_PARAMS 5
 
+#define DATABASE_PREFIX "ssm_dataset"
 #define DATABASE_PATH "sunsky-testing/res/datasets/"
 
 template <typename Float, typename Spectrum>
@@ -111,13 +107,16 @@ public:
                     sun_eta = 0.5f * dr::Pi<ScalarFloat> - sun_theta;
 
         // ================= GET SKY RADIANCE =================
-        m_dataset = array_from_file<double, ScalarFloat>(DATABASE_PATH + DATASET_NAME + ".bin");
-        m_rad_dataset = array_from_file<double, ScalarFloat>(DATABASE_PATH + DATASET_NAME + "_rad.bin");
+        m_sky_dataset = array_from_file<double, ScalarFloat>(DATABASE_PATH + SKY_DATASET_NAME + ".bin");
+        m_sky_rad_dataset = array_from_file<double, ScalarFloat>(DATABASE_PATH + SKY_DATASET_NAME + "_rad.bin");
 
         update_radiance_params(albedo_buff, turbidity, sun_eta);
 
         // ================= GET SUN RADIANCE =================
-        update_sun_radiance(sun_theta, turbidity);
+        m_sun_ld_dataset = array_from_file<double, ScalarFloat>(DATABASE_PATH DATABASE_PREFIX "_ld_sun.bin");
+        m_sun_rad_dataset = array_from_file<double, ScalarFloat>(DATABASE_PATH DATABASE_PREFIX "_solar.bin");
+
+        update_sun_radiance(turbidity);
 
         // ================= GET TGMM TABLES =================
         m_tgmm_tables = array_from_file<float, ScalarFloat>(DATABASE_PATH "tgmm_tables.bin");
@@ -276,9 +275,9 @@ public:
     MI_DECLARE_CLASS()
 private:
 
-    const std::string DATASET_NAME = is_spectral_v<Spectrum> ?
-        "ssm_dataset_spec" :
-        "ssm_dataset_rgb";
+    const std::string SKY_DATASET_NAME = is_spectral_v<Spectrum> ?
+        DATABASE_PREFIX "_spec" :
+        DATABASE_PREFIX "_rgb";
 
     static constexpr size_t WAVELENGTH_STEP = 40;
     static constexpr ScalarFloat WAVELENGTHS[11] = {
@@ -286,8 +285,8 @@ private:
     };
 
     static constexpr size_t NB_CHANNELS = is_spectral_v<Spectrum> ? 11 : 3,
-                            DATASET_SIZE = NB_TURBIDITY * NB_ALBEDO * NB_CTRL_PTS * NB_CHANNELS * NB_PARAMS,
-                            RAD_DATASET_SIZE = NB_TURBIDITY * NB_ALBEDO * NB_CTRL_PTS * NB_CHANNELS;
+                            DATASET_SIZE = NB_TURBIDITY * NB_ALBEDO * NB_SKY_CTRL_PTS * NB_CHANNELS * NB_SKY_PARAMS,
+                            RAD_DATASET_SIZE = NB_TURBIDITY * NB_ALBEDO * NB_SKY_CTRL_PTS * NB_CHANNELS;
 
     Float m_surface_area;
     BoundingSphere3f m_bsphere;
@@ -313,18 +312,19 @@ private:
     DiscreteDistribution<Float> m_gaussian_distr;
 
     // Permanent datasets loaded from files/memory
-    std::vector<ScalarFloat> m_dataset;
-    std::vector<ScalarFloat> m_rad_dataset;
+    std::vector<ScalarFloat> m_sky_dataset;
+    std::vector<ScalarFloat> m_sky_rad_dataset;
+    std::vector<ScalarFloat> m_sun_ld_dataset;
+    std::vector<ScalarFloat> m_sun_rad_dataset;
     std::vector<ScalarFloat> m_tgmm_tables;
-    SunParameters<ScalarFloat> m_sun_params;
 
 
     Spectrum render_sky(const SpecUInt32& channel_idx,
         const Float& cos_theta, const Float& cos_gamma, const SpecMask& active) const {
 
-        Spectrum coefs[NB_PARAMS];
-        for (uint8_t i = 0; i < NB_PARAMS; ++i)
-            coefs[i] = dr::gather<Spectrum>(m_params, channel_idx * NB_PARAMS + i, active);
+        Spectrum coefs[NB_SKY_PARAMS];
+        for (uint8_t i = 0; i < NB_SKY_PARAMS; ++i)
+            coefs[i] = dr::gather<Spectrum>(m_params, channel_idx * NB_SKY_PARAMS + i, active);
 
         Float gamma = dr::acos(cos_gamma),
               cos_gamma_sqr = dr::square(cos_gamma);
@@ -418,8 +418,11 @@ private:
         return dr::normalize(to_spherical(angles));
     }
 
-    void update_sun_radiance(ScalarFloat sun_theta, ScalarFloat turbidity) {
-        std::vector<ScalarFloat> sun_radiance = compute_sun_radiance(m_sun_params, sun_theta, turbidity);
+    void update_sun_radiance(ScalarFloat turbidity) {
+        //std::vector<ScalarFloat> sun_radiance = compute_sun_radiance(m_sun_params, sun_theta, turbidity);
+        std::vector<ScalarFloat> sun_radiance = std::vector<ScalarFloat>(91, 0.f);
+
+        compute_sun_params(m_sun_rad_dataset, turbidity);
 
         if constexpr (is_spectral_v<Spectrum>) {
             m_sun_radiance = SolarRadiance({350.f, 800.f},
@@ -497,8 +500,8 @@ private:
     void update_radiance_params(const Albedo& albedo,
                                 ScalarFloat turbidity, ScalarFloat eta) {
         std::vector<ScalarFloat>
-                params = compute_radiance_params(m_dataset, albedo, turbidity, eta),
-                radiance = compute_radiance_params(m_rad_dataset, albedo, turbidity, eta);
+                params = compute_radiance_params(m_sky_dataset, albedo, turbidity, eta),
+                radiance = compute_radiance_params(m_sky_rad_dataset, albedo, turbidity, eta);
 
         m_params = dr::load<FloatStorage>(params.data(), params.size());
         m_sky_radiance = dr::load<FloatStorage>(radiance.data(), radiance.size());

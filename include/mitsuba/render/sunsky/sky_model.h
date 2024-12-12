@@ -1,38 +1,20 @@
 #pragma once
 
 #include <vector>
-
-#include <mitsuba/core/fwd.h>
-
-#define NB_TURBIDITY 10
-#define NB_ALBEDO 2
-#define NB_CTRL_PTS 6
-#define NB_PARAMS 9
-
+#include "sunsky_helpers.h"
 
 NAMESPACE_BEGIN(mitsuba)
-
-    template<typename ScalarFloat>
-    std::vector<ScalarFloat> lerp_vectors(const std::vector<ScalarFloat>& a, const std::vector<ScalarFloat>& b, const ScalarFloat& t) {
-        assert(a.size() == b.size());
-
-        std::vector<ScalarFloat> res(a.size());
-        for (size_t i = 0; i < a.size(); ++i)
-            res[i] = dr::lerp(a[i], b[i], t);
-
-        return res;
-    }
 
     template <typename ScalarFloat>
     std::vector<ScalarFloat> bezier_interpolate(
         const std::vector<ScalarFloat>& dataset, size_t out_size,
         const uint32_t& offset, const ScalarFloat& x) {
 
-        constexpr ScalarFloat coefs[NB_CTRL_PTS] =
+        constexpr ScalarFloat coefs[NB_SKY_CTRL_PTS] =
             {1, 5, 10, 10, 5, 1};
 
         std::vector<ScalarFloat> res(out_size, 0.0f);
-        for (size_t ctrl_pt = 0; ctrl_pt < NB_CTRL_PTS; ++ctrl_pt) {
+        for (size_t ctrl_pt = 0; ctrl_pt < NB_SKY_CTRL_PTS; ++ctrl_pt) {
 
             uint32_t index = offset + ctrl_pt * out_size;
             ScalarFloat coef = coefs[ctrl_pt] * dr::pow(1 - x, 5 - ctrl_pt) * dr::pow(x, ctrl_pt);
@@ -64,7 +46,7 @@ NAMESPACE_BEGIN(mitsuba)
 
         const size_t t_block_size = dataset.size() / NB_TURBIDITY,
                      a_block_size = t_block_size  / NB_ALBEDO,
-                     result_size  = a_block_size / NB_CTRL_PTS,
+                     result_size  = a_block_size / NB_SKY_CTRL_PTS,
                      nb_params    = result_size / albedo.size(); // Either 1 or 9
                                  // albedo.size() <==> NB_CHANNELS
 

@@ -3,6 +3,7 @@
 #include <utility>
 #include <vector>
 
+#include "sunsky_helpers.h"
 #include "ArHosekSkyModelData_Spectral.h"
 #include "ArHosekSkyModelData_RGB.h"
 #include "ArHosekSkyModelData_CIEXYZ.h"
@@ -10,15 +11,6 @@
 
 #include <drjit/dynamic.h>
 #include <drjit/tensor.h>
-
-
-#define NB_TURBIDITY 10
-#define NB_CTRL_PT   6
-#define NB_PARAMS    9
-#define NB_ALBEDO    2
-
-#define NB_ORDER 4
-#define NB_PIECES 45
 
 NAMESPACE_BEGIN(mitsuba)
 
@@ -32,14 +24,14 @@ NAMESPACE_BEGIN(mitsuba)
     enum class SunDataShapeIdx: uint32_t { WAVELENGTH = 0, TURBIDITY, PIECES, ORDER };
     enum class SkyDataShapeIdx: uint32_t { WAVELENGTH = 0, ALBEDO, TURBIDITY, CTRL_PT, PARAMS };
 
-    constexpr size_t solar_shape[4] = {11, NB_TURBIDITY, NB_PIECES, NB_ORDER};
+    constexpr size_t solar_shape[4] = {11, NB_TURBIDITY, NB_SUN_SEGMENTS, NB_SUN_CTRL_PTS};
     constexpr size_t limb_darkening_shape[2] = {11, 6};
 
-    constexpr size_t f_spec_shape[F_DIM] = {11, NB_ALBEDO, NB_TURBIDITY, NB_CTRL_PT, NB_PARAMS};
-    constexpr size_t l_spec_shape[L_DIM] = {11, NB_ALBEDO, NB_TURBIDITY, NB_CTRL_PT};
+    constexpr size_t f_spec_shape[F_DIM] = {11, NB_ALBEDO, NB_TURBIDITY, NB_SKY_CTRL_PTS, NB_SKY_PARAMS};
+    constexpr size_t l_spec_shape[L_DIM] = {11, NB_ALBEDO, NB_TURBIDITY, NB_SKY_CTRL_PTS};
 
-    constexpr size_t f_tri_shape[F_DIM] = {3, NB_ALBEDO, NB_TURBIDITY, NB_CTRL_PT, NB_PARAMS};
-    constexpr size_t l_tri_shape[L_DIM] = {3, NB_ALBEDO, NB_TURBIDITY, NB_CTRL_PT};
+    constexpr size_t f_tri_shape[F_DIM] = {3, NB_ALBEDO, NB_TURBIDITY, NB_SKY_CTRL_PTS, NB_SKY_PARAMS};
+    constexpr size_t l_tri_shape[L_DIM] = {3, NB_ALBEDO, NB_TURBIDITY, NB_SKY_CTRL_PTS};
 
     struct Dataset {
         size_t nb_dims;
@@ -136,11 +128,11 @@ NAMESPACE_BEGIN(mitsuba)
         file.write(dim_size[(uint32_t)SunDataShapeIdx::WAVELENGTH]);
 
         for (size_t t = 0; t < NB_TURBIDITY; ++t) {
-            for (size_t p = 0; p < NB_PIECES; ++p) {
-                for (size_t o = 0; o < NB_ORDER; ++o) {
+            for (size_t p = 0; p < NB_SUN_SEGMENTS; ++p) {
+                for (size_t o = 0; o < NB_SUN_CTRL_PTS; ++o) {
                     for (size_t w = 0; w < 11; ++w) {
-                        const size_t src_global_offset = t * (NB_PIECES * NB_ORDER) +
-                                                         p * NB_ORDER + o;
+                        const size_t src_global_offset = t * (NB_SUN_SEGMENTS * NB_SUN_CTRL_PTS) +
+                                                         p * NB_SUN_CTRL_PTS + o;
                         file.write(p_dataset[w][src_global_offset]);
                     }
                 }
@@ -177,7 +169,7 @@ NAMESPACE_BEGIN(mitsuba)
             file.write(dim_size[(uint32_t)SkyDataShapeIdx::PARAMS]);
 
 
-        const size_t nb_params = nb_dims == F_DIM ? NB_PARAMS : 1,
+        const size_t nb_params = nb_dims == F_DIM ? NB_SKY_PARAMS : 1,
                      nb_colors = dim_size[(uint32_t)SkyDataShapeIdx::WAVELENGTH];
 
         double* buffer = (double*)calloc(tensor_size, sizeof(double));
@@ -187,18 +179,18 @@ NAMESPACE_BEGIN(mitsuba)
 
             for (size_t a = 0; a < NB_ALBEDO; ++a) {
 
-                for (size_t ctrl_idx = 0; ctrl_idx < NB_CTRL_PT; ++ctrl_idx) {
+                for (size_t ctrl_idx = 0; ctrl_idx < NB_SKY_CTRL_PTS; ++ctrl_idx) {
 
                     for (size_t color_idx = 0; color_idx < nb_colors; ++color_idx) {
 
                         for (size_t param_idx = 0; param_idx < nb_params; ++param_idx) {
-                            size_t dest_global_offset = t * (NB_ALBEDO * NB_CTRL_PT * nb_colors * nb_params) +
-                                                        a * (NB_CTRL_PT * nb_colors * nb_params) +
+                            size_t dest_global_offset = t * (NB_ALBEDO * NB_SKY_CTRL_PTS * nb_colors * nb_params) +
+                                                        a * (NB_SKY_CTRL_PTS * nb_colors * nb_params) +
                                                         ctrl_idx * nb_colors * nb_params +
                                                         color_idx * nb_params +
                                                         param_idx;
-                            size_t src_global_offset = a * (NB_TURBIDITY * NB_CTRL_PT * nb_params) +
-                                                       t * (NB_CTRL_PT * nb_params) +
+                            size_t src_global_offset = a * (NB_TURBIDITY * NB_SKY_CTRL_PTS * nb_params) +
+                                                       t * (NB_SKY_CTRL_PTS * nb_params) +
                                                        ctrl_idx * nb_params +
                                                        param_idx;
                             buffer[dest_global_offset] = p_dataset[color_idx][src_global_offset];
@@ -234,7 +226,7 @@ NAMESPACE_BEGIN(mitsuba)
         // =============== Read headers ===============
         char text_buff[5] = "";
         file.read(text_buff, 3);
-        if (strcmp(text_buff, "SKY"))
+        if (strcmp(text_buff, "SKY") != 0 && strcmp(text_buff, "SUN") != 0)
             Throw("OUPSSS wrong file");
 
         // Read version
@@ -305,7 +297,7 @@ NAMESPACE_BEGIN(mitsuba)
         // =============== Read headers ===============
         char text_buff[5] = "";
         file.read(text_buff, 3);
-        if (strcmp(text_buff, "SKY"))
+        if (strcmp(text_buff, "SKY") != 0 && strcmp(text_buff, "SUN") != 0)
             Throw("OUPSSS wrong file");
 
         // Read version
