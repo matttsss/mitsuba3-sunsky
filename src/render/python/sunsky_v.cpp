@@ -10,9 +10,7 @@
 MI_PY_EXPORT(sunsky) {
     MI_PY_IMPORT_TYPES()
 
-    m.def("write_sky_model_data_v0", &write_sky_model_data_v0, "path"_a)
-     .def("write_sky_model_data_v1", &write_sky_model_data_v1, "path"_a)
-     .def("write_sky_model_data_v2", &write_sky_model_data_v2, "path"_a)
+    m.def("write_sun_sky_model_data", &write_sun_sky_model_data, "path"_a)
      .def("tensor_from_file", &tensor_from_file<Float>, "path"_a)
      .def("array_from_file_f", &array_from_file<float, ScalarFloat>, "path"_a)
      .def("array_from_file_d", &array_from_file<double, ScalarFloat>, "path"_a)

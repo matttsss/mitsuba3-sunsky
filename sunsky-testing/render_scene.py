@@ -54,4 +54,4 @@ def render_and_write_scene(scene_name):
 if __name__ == "__main__":
     mi.set_variant("llvm_rgb")
     dr.set_log_level(dr.LogLevel.Warn)
-    render_and_write_scene("sky_rgb_3")
+    render_and_write_scene("test_sun")

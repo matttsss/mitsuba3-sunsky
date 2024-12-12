@@ -277,8 +277,8 @@ public:
 private:
 
     const std::string DATASET_NAME = is_spectral_v<Spectrum> ?
-        "ssm_dataset_v2_spec" :
-        "ssm_dataset_v2_rgb";
+        "ssm_dataset_spec" :
+        "ssm_dataset_rgb";
 
     static constexpr size_t WAVELENGTH_STEP = 40;
     static constexpr ScalarFloat WAVELENGTHS[11] = {
@@ -427,8 +427,9 @@ private:
                                     sun_radiance.size());
 
         } else if constexpr (is_rgb_v<Spectrum>) {
+            ScalarFloat solarWavelengths[91] = {};
             FloatStorage value = dr::load<FloatStorage>(sun_radiance.data(), sun_radiance.size()),
-                         wavelengths = dr::load<FloatStorage>(solarWavelenghts, 91);
+                         wavelengths = dr::load<FloatStorage>(solarWavelengths, 91);
 
             // Transform solar spectrum computed on 91 wavelengths to RGB
             Color<FloatStorage, 3> rgb = linear_rgb_rec(wavelengths);

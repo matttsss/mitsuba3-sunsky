@@ -3,7 +3,9 @@
 #include <utility>
 #include <vector>
 
-#include "sky_data.h"
+#include "ArHosekSkyModelData_Spectral.h"
+#include "ArHosekSkyModelData_RGB.h"
+#include "ArHosekSkyModelData_CIEXYZ.h"
 #include <mitsuba/core/fstream.h>
 
 #include <drjit/dynamic.h>
@@ -15,6 +17,9 @@
 #define NB_PARAMS    9
 #define NB_ALBEDO    2
 
+#define NB_ORDER 4
+#define NB_PIECES 45
+
 NAMESPACE_BEGIN(mitsuba)
 
     // ================================================================================================
@@ -24,7 +29,11 @@ NAMESPACE_BEGIN(mitsuba)
     #define F_DIM 5
     #define L_DIM 4
 
-    enum DataSetShapeIdx { WAVELENGTH = 0, ALBEDO, TURBIDITY, CTRL_PT, PARAMS };
+    enum class SunDataShapeIdx: uint32_t { WAVELENGTH = 0, TURBIDITY, PIECES, ORDER };
+    enum class SkyDataShapeIdx: uint32_t { WAVELENGTH = 0, ALBEDO, TURBIDITY, CTRL_PT, PARAMS };
+
+    constexpr size_t solar_shape[4] = {11, NB_TURBIDITY, NB_PIECES, NB_ORDER};
+    constexpr size_t limb_darkening_shape[2] = {11, 6};
 
     constexpr size_t f_spec_shape[F_DIM] = {11, NB_ALBEDO, NB_TURBIDITY, NB_CTRL_PT, NB_PARAMS};
     constexpr size_t l_spec_shape[L_DIM] = {11, NB_ALBEDO, NB_TURBIDITY, NB_CTRL_PT};
@@ -75,14 +84,80 @@ NAMESPACE_BEGIN(mitsuba)
         .dataset = datasetsXYZRad
     };
 
+    constexpr Dataset solar_dataset = {
+        .nb_dims = 4,
+        .dim_size = solar_shape,
+        .dataset = solarDatasets
+    };
 
-    void write_tensor_data_v2(const std::string &path, const Dataset& dataset) {
+    constexpr Dataset limb_darkening_dataset = {
+        .nb_dims = 2,
+        .dim_size = limb_darkening_shape,
+        .dataset = limbDarkeningDatasets
+    };
+
+    void write_limb_darkening_data(const std::string& path) {
+        const auto [nb_dims, dim_size, p_dataset] = limb_darkening_dataset;
+        FileStream file(path, FileStream::EMode::ETruncReadWrite);
+
+        // Write headers
+        file.write("SUN", 3);
+        file.write((uint32_t)0);
+
+        // Write tensor dimensions
+        file.write(nb_dims);
+
+        // Write reordered shapes
+        file.write(dim_size[0]);
+        file.write(dim_size[1]);
+
+        for (size_t w = 0; w < 11; ++w) {
+            for (size_t p = 0; p < 6; ++p) {
+                file.write(p_dataset[w][p]);
+            }
+        }
+    }
+
+    void write_sun_data(const std::string& path) {
+        const auto [nb_dims, dim_size, p_dataset] = solar_dataset;
+        FileStream file(path, FileStream::EMode::ETruncReadWrite);
+
+        // Write headers
+        file.write("SUN", 3);
+        file.write((uint32_t)0);
+
+        // Write tensor dimensions
+        file.write(nb_dims);
+
+        // Write reordered shapes
+        file.write(dim_size[(uint32_t)SunDataShapeIdx::TURBIDITY]);
+        file.write(dim_size[(uint32_t)SunDataShapeIdx::PIECES]);
+        file.write(dim_size[(uint32_t)SunDataShapeIdx::ORDER]);
+        file.write(dim_size[(uint32_t)SunDataShapeIdx::WAVELENGTH]);
+
+        for (size_t t = 0; t < NB_TURBIDITY; ++t) {
+            for (size_t p = 0; p < NB_PIECES; ++p) {
+                for (size_t o = 0; o < NB_ORDER; ++o) {
+                    for (size_t w = 0; w < 11; ++w) {
+                        const size_t src_global_offset = t * (NB_PIECES * NB_ORDER) +
+                                                         p * NB_ORDER + o;
+                        file.write(p_dataset[w][src_global_offset]);
+                    }
+                }
+            }
+        }
+
+
+    }
+
+
+    void write_sky_data(const std::string &path, const Dataset& dataset) {
         const auto [nb_dims, dim_size, p_dataset] = dataset;
         FileStream file(path, FileStream::EMode::ETruncReadWrite);
 
         // Write headers
         file.write("SKY", 3);
-        file.write((uint32_t)2);
+        file.write((uint32_t)0);
 
         // Write tensor dimensions
         file.write(nb_dims);
@@ -93,17 +168,17 @@ NAMESPACE_BEGIN(mitsuba)
 
 
         // Write reordered shapes
-        file.write(dim_size[TURBIDITY]);
-        file.write(dim_size[ALBEDO]);
-        file.write(dim_size[CTRL_PT]);
-        file.write(dim_size[WAVELENGTH]);
+        file.write(dim_size[(uint32_t)SkyDataShapeIdx::TURBIDITY]);
+        file.write(dim_size[(uint32_t)SkyDataShapeIdx::ALBEDO]);
+        file.write(dim_size[(uint32_t)SkyDataShapeIdx::CTRL_PT]);
+        file.write(dim_size[(uint32_t)SkyDataShapeIdx::WAVELENGTH]);
 
         if (nb_dims == F_DIM)
-            file.write(dim_size[PARAMS]);
+            file.write(dim_size[(uint32_t)SkyDataShapeIdx::PARAMS]);
 
 
         const size_t nb_params = nb_dims == F_DIM ? NB_PARAMS : 1,
-                     nb_colors = dim_size[WAVELENGTH];
+                     nb_colors = dim_size[(uint32_t)SkyDataShapeIdx::WAVELENGTH];
 
         double* buffer = (double*)calloc(tensor_size, sizeof(double));
 
@@ -141,116 +216,15 @@ NAMESPACE_BEGIN(mitsuba)
         file.close();
     }
 
-    void write_sky_model_data_v2(const std::string &path) {
-        write_tensor_data_v2(path + "_v2_spec.bin", f_spectral);
-        write_tensor_data_v2(path + "_v2_spec_rad.bin", l_spectral);
-        write_tensor_data_v2(path + "_v2_rgb.bin", f_RGB);
-        write_tensor_data_v2(path + "_v2_rgb_rad.bin", l_RGB);
-        write_tensor_data_v2(path + "_v2_xyz.bin", f_XYZ);
-        write_tensor_data_v2(path + "_v2_xyz_rad.bin", l_XYZ);
-    }
-
-
-    void write_tensor_data_v1(const std::string &path, const Dataset& dataset) {
-        const auto [nb_dims, dim_size, p_dataset] = dataset;
-        FileStream file(path, FileStream::EMode::ETruncReadWrite);
-
-        // Write headers
-        file.write("SKY", 3);
-        file.write((uint32_t)1);
-
-        // Write tensor dimensions
-        file.write(nb_dims);
-
-        size_t tensor_size = 1;
-        for (size_t dim = 0; dim < nb_dims; ++dim)
-            tensor_size *= dim_size[dim];
-
-
-        // Write reordered shapes
-        file.write(dim_size[ALBEDO]);
-        file.write(dim_size[TURBIDITY]);
-        file.write(dim_size[CTRL_PT]);
-        file.write(dim_size[WAVELENGTH]);
-
-        if (nb_dims == F_DIM)
-            file.write(dim_size[PARAMS]);
-
-
-        const size_t nb_params = nb_dims == F_DIM ? NB_PARAMS : 1,
-                     nb_colors = dim_size[WAVELENGTH];
-
-        double* buffer = (double*)calloc(tensor_size, sizeof(double));
-
-        // Converts from (11 x 2 x 10 x 6 x ...) to (2 x 10 x 6 x 11 x ...)
-        for (size_t a = 0; a < NB_ALBEDO; ++a) {
-
-            for (size_t t = 0; t < NB_TURBIDITY; ++t) {
-
-                for (size_t ctrl_idx = 0; ctrl_idx < NB_CTRL_PT; ++ctrl_idx) {
-
-                    for (size_t color_idx = 0; color_idx < nb_colors; ++color_idx) {
-
-                        for (size_t param_idx = 0; param_idx < nb_params; ++param_idx) {
-                            size_t dest_global_offset = a * (NB_TURBIDITY * NB_CTRL_PT * nb_colors * nb_params) +
-                                                        t * (NB_CTRL_PT * nb_colors * nb_params) +
-                                                        ctrl_idx * nb_colors * nb_params +
-                                                        color_idx * nb_params +
-                                                        param_idx;
-                            size_t src_global_offset = a * (NB_TURBIDITY * NB_CTRL_PT * nb_params) +
-                                                       t * (NB_CTRL_PT * nb_params) +
-                                                       ctrl_idx * nb_params +
-                                                       param_idx;
-                            buffer[dest_global_offset] = p_dataset[color_idx][src_global_offset];
-
-                        }
-                    }
-                }
-            }
-        }
-
-        // Write the data from the dataset
-        file.write_array(buffer, tensor_size);
-
-        free(buffer);
-        file.close();
-    }
-
-    void write_sky_model_data_v1(const std::string &path) {
-        write_tensor_data_v1(path + "_v1_spec.bin", f_spectral);
-        write_tensor_data_v1(path + "_v1_spec_rad.bin", l_spectral);
-        write_tensor_data_v1(path + "_v1_rgb.bin", f_RGB);
-        write_tensor_data_v1(path + "_v1_rgb_rad.bin", l_RGB);
-    }
-
-    void write_tensor_data_v0(const std::string &path, const Dataset& dataset) {
-        const auto [nb_dims, dim_size, p_dataset] = dataset;
-        FileStream file(path, FileStream::EMode::ETruncReadWrite);
-
-        // Write headers
-        file.write("SKY", 3);
-        file.write((uint32_t)0);
-
-        // Write tensor dimensions
-        file.write(nb_dims);
-        size_t lane_size = 1;
-        for (size_t dim = 0; dim < nb_dims; ++dim) {
-            file.write(dim_size[dim]);
-            lane_size *= dim ? dim_size[dim] : 1;
-        }
-
-        // Write the data from the dataset
-        for (size_t lane_idx = 0; lane_idx < dim_size[0]; ++lane_idx)
-            file.write_array(p_dataset[lane_idx], lane_size);
-
-        file.close();
-    }
-
-    void write_sky_model_data_v0(const std::string &path) {
-        write_tensor_data_v0(path + "_v0_spec.bin", f_spectral);
-        write_tensor_data_v0(path + "_v0_spec_rad.bin", l_spectral);
-        write_tensor_data_v0(path + "_v0_rgb.bin", f_RGB);
-        write_tensor_data_v0(path + "_v0_rgb_rad.bin", l_RGB);
+    void write_sun_sky_model_data(const std::string &path) {
+        write_sky_data(path + "_spec.bin", f_spectral);
+        write_sky_data(path + "_spec_rad.bin", l_spectral);
+        write_sky_data(path + "_rgb.bin", f_RGB);
+        write_sky_data(path + "_rgb_rad.bin", l_RGB);
+        write_sky_data(path + "_xyz.bin", f_XYZ);
+        write_sky_data(path + "_xyz_rad.bin", l_XYZ);
+        write_sun_data(path + "_solar.bin");
+        write_limb_darkening_data(path + "_ld_sun.bin");
     }
 
     template<typename FileType, typename OutType>
