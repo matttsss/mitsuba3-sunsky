@@ -81,7 +81,8 @@ def test_chi2_emitter():
     # Compute coefficients
     sky = {
         "type": plugin,
-        "sun_direction": [cp_sun * st, sp_sun * st, ct],
+        "sunDirection": [cp_sun * st, sp_sun * st, ct],
+        "sunScale": 0.0,
         "turbidity": t,
         "albedo": a
     }
@@ -110,7 +111,8 @@ def plot_pdf():
     # Compute coefficients
     sky = mi.load_dict({
         "type": plugin,
-        "sun_direction": [cp * st, sp * st, ct],
+        "sunDirection": [cp * st, sp * st, ct],
+        "sunScale": 0.0,
         "turbidity": t,
         "albedo": a
     })
@@ -267,7 +269,7 @@ def test_render(render_shape, t, a, eta, wavelengths=None):
     # Compute coefficients
     sky = mi.load_dict({
         "type": plugin,
-        "sun_direction": [cp_sun * st, sp_sun * st, ct],
+        "sunDirection": [cp_sun * st, sp_sun * st, ct],
         "turbidity": t,
         "albedo": a
     })

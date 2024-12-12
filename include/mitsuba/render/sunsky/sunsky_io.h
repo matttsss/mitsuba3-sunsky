@@ -63,6 +63,18 @@ NAMESPACE_BEGIN(mitsuba)
         .dataset = datasetsRGBRad
     };
 
+    constexpr Dataset f_XYZ = {
+        .nb_dims = F_DIM,
+        .dim_size = f_tri_shape,
+        .dataset = datasetsXYZ
+    };
+
+    constexpr Dataset l_XYZ = {
+        .nb_dims = L_DIM,
+        .dim_size = l_tri_shape,
+        .dataset = datasetsXYZRad
+    };
+
 
     void write_tensor_data_v2(const std::string &path, const Dataset& dataset) {
         const auto [nb_dims, dim_size, p_dataset] = dataset;
@@ -134,6 +146,8 @@ NAMESPACE_BEGIN(mitsuba)
         write_tensor_data_v2(path + "_v2_spec_rad.bin", l_spectral);
         write_tensor_data_v2(path + "_v2_rgb.bin", f_RGB);
         write_tensor_data_v2(path + "_v2_rgb_rad.bin", l_RGB);
+        write_tensor_data_v2(path + "_v2_xyz.bin", f_XYZ);
+        write_tensor_data_v2(path + "_v2_xyz_rad.bin", l_XYZ);
     }
 
 

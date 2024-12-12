@@ -16,7 +16,7 @@ def plot_pdf():
     st, ct = dr.sincos(dr.pi/2 - eta)
     sky = {
         "type": "sunsky",
-        "sun_direction": [cp_sun * st, sp_sun * st, ct],
+        "sunDirection": [cp_sun * st, sp_sun * st, ct],
         "turbidity": t,
         "albedo": a
     }

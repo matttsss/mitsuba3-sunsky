@@ -83,6 +83,9 @@ public:
 
         m_d65 = Texture::D65(1.f);
 
+        m_sun_scale = props.get<ScalarFloat>("sunScale", 1.f);
+        m_sky_scale = props.get<ScalarFloat>("skyScale", 1.f);
+
         // ================ GET TURBIDITY ===============
         ScalarFloat turbidity = props.get<ScalarFloat>("turbidity", 3.f);
 
@@ -97,7 +100,7 @@ public:
         // ================= GET ANGLES =================
         ScalarVector3f local_sun_dir = dr::normalize(
             m_to_world.scalar().inverse()
-            .transform_affine(props.get<ScalarVector3f>("sun_direction")));
+            .transform_affine(props.get<ScalarVector3f>("sunDirection")));
 
         m_local_sun_frame = Frame3f(local_sun_dir);
 
@@ -189,18 +192,16 @@ public:
 
     std::pair<Vector3f, Float> sample_sun(const Point2f& sample) const {
         Vector3f sun_sample = warp::square_to_uniform_cone(sample, m_sun_cos_cutoff);
-        sun_sample = m_local_sun_frame.to_world(sun_sample);
+        Float pdf = warp::square_to_uniform_cone_pdf(sun_sample, m_sun_cos_cutoff);
 
-        return {
-            sun_sample, warp::square_to_uniform_cone_pdf(sun_sample, m_sun_cos_cutoff)
-        };
+        return { m_local_sun_frame.to_world(sun_sample), pdf };
     }
 
     std::pair<Vector3f, Float> sample_sky(const Point2f& sample, const Mask& active) const {
         Vector3f sky_sample = tgmm_sample(sample, active);
-        return {
-            sky_sample, tgmm_pdf(sky_sample, active)
-        };
+        Float pdf = tgmm_pdf(sky_sample, active);
+
+        return { sky_sample, pdf };
     }
 
 
@@ -216,7 +217,9 @@ public:
                 sample_sun({(sample.x() - boundary) / (1 - boundary), sample.y()})
         );
 
-        pdf = dr::select(sample_dir.z() < 0.f, 0.f, pdf * inv_sin_theta(sample_dir));
+        Float sin_theta = Frame3f::sin_theta(sample_dir);
+        active &= (Frame3f::cos_theta(sample_dir) >= 0.f) && (sin_theta != 0.f);
+        pdf = dr::select(active, pdf / sin_theta, 0.f);
 
         // Automatically enlarge the bounding sphere when it does not contain the reference point
         Float radius = dr::maximum(m_bsphere.radius, dr::norm(it.p - m_bsphere.center)),
@@ -245,11 +248,14 @@ public:
         MI_MASKED_FUNCTION(ProfilerPhase::EndpointEvaluate, active);
 
         Vector3f local_dir = dr::normalize(m_to_world.value().inverse().transform_affine(ds.d));
+        active &= (Frame3f::cos_theta(local_dir) >= 0.f) && (Frame3f::sin_theta(local_dir) != 0.f);
 
         Float sun_pdf = warp::square_to_uniform_cone_pdf(m_local_sun_frame.to_local(local_dir), m_sun_cos_cutoff);
         Float sky_pdf = tgmm_pdf(local_dir, active);
 
-        return inv_sin_theta(local_dir) * (m_sky_scale * sky_pdf + m_sun_scale * sun_pdf) / (m_sky_scale + m_sun_scale);
+        Float combined_pdf = (m_sky_scale * sky_pdf + m_sun_scale * sun_pdf) / (m_sky_scale + m_sun_scale);
+
+        return dr::select(active, combined_pdf / Frame3f::sin_theta(local_dir), 0.f);
     }
 
     /// This emitter does not occupy any particular region of space, return an invalid bounding box
@@ -287,8 +293,8 @@ private:
     BoundingSphere3f m_bsphere;
 
     Float m_turbidity;
-    ScalarFloat m_sky_scale = 1.f;
-    ScalarFloat m_sun_scale = 0.f;
+    ScalarFloat m_sky_scale;
+    ScalarFloat m_sun_scale;
 
     Float m_sun_phi;
     Vector3f m_local_sun_dir;
@@ -362,7 +368,7 @@ private:
         angles.x() = dr::select(angles.x() < 0, angles.x() + dr::TwoPi<Float>, angles.x());
 
         // Bounds check for theta
-        active &= (angles.y() > 0) && (angles.y() <= 0.5f * dr::Pi<Float>);
+        active &= (angles.y() >= 0.f) && (angles.y() <= 0.5f * dr::Pi<Float>);
 
         const Point2f a = { 0.0 },
                       b = { dr::TwoPi<Float>, 0.5f * dr::Pi<Float> };
@@ -414,13 +420,6 @@ private:
 
     void update_sun_radiance(ScalarFloat sun_theta, ScalarFloat turbidity) {
         std::vector<ScalarFloat> sun_radiance = compute_sun_radiance(m_sun_params, sun_theta, turbidity);
-
-        //ScalarFloat half_aperture = dr::deg_to_rad(SUN_APP_RADIUS * 0.5),
-        //            solid_angle = dr::TwoPi<Float> * (1 - dr::cos(half_aperture));
-
-        // TODO: no need to multiply with solid angles since we work with radiance?
-        // for (ScalarFloat& value : sun_radiance)
-        //     value *= solid_angle;
 
         if constexpr (is_spectral_v<Spectrum>) {
             m_sun_radiance = SolarRadiance({350.f, 800.f},

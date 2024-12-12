@@ -58,7 +58,7 @@ class SunskyEmitter(mi.Emitter):
 
         # Get sun direction / elevation
         self.to_world = props.get("to_world", mi.Transform4f(1))
-        self.m_local_sun = dr.normalize(self.to_world.inverse() @ props.get("sun_direction"))
+        self.m_local_sun = dr.normalize(self.to_world.inverse() @ props.get("sunDirection"))
 
 
         self.sun_phi = dr.acos(mi.Frame3f.cos_phi(self.m_local_sun))

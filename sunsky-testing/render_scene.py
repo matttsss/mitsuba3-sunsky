@@ -30,7 +30,8 @@ def render_scene(t, a, eta, phi_sun):
         },
         'emitter': {
             'type': 'sunsky',
-            'sun_direction': [cp * st, sp * st, ct],
+            'sunDirection': [cp * st, sp * st, ct],
+            'sunScale': 0.0,
             'turbidity': t,
             'albedo': a,
         }
