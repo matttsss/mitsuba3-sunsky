@@ -8,6 +8,8 @@
 #define EARTH_MEAN_RADIUS 6371.01   // In km
 #define ASTRONOMICAL_UNIT 149597890 // In km
 
+#define SUN_COS_CUTOFF (Float) dr::cos(dr::deg_to_rad((ScalarFloat) (SUN_APP_RADIUS * 0.5)))
+
 NAMESPACE_BEGIN(mitsuba)
 
     // ================================================================================================
@@ -161,17 +163,19 @@ NAMESPACE_BEGIN(mitsuba)
         turbidity = dr::clip(turbidity, 1.f, 10.f);
         uint32_t t_int = dr::floor2int<uint32_t>(turbidity),
                  t_low = dr::maximum(t_int - 1, 0),
-                 t_high = dr::minimum(t_low + 1, 10 - 1);
+                 t_high = dr::minimum(t_low + 1, NB_TURBIDITY - 1);
 
-        auto t_low_iterator = sun_dataset.begin() + t_low * 4 * 45;
-        std::vector<ScalarFloat> t_low_val = std::vector<ScalarFloat>(
-            t_low_iterator, t_low_iterator + 4 * 45);
+        uint32_t t_block_size = sun_dataset.size() / NB_TURBIDITY;
 
-        auto t_high_iterator = sun_dataset.begin() + t_high * 4 * 45;
-        std::vector<ScalarFloat> t_high_val = std::vector<ScalarFloat>(
-            t_high_iterator, t_high_iterator + 4 * 45);
+        std::vector<ScalarFloat> res = std::vector<ScalarFloat>(t_block_size);
+        for (uint32_t i = 0; i < t_block_size; ++i) {
+            ScalarFloat t_low_val  = sun_dataset[t_low  * t_block_size + i],
+                        t_high_val = sun_dataset[t_high * t_block_size + i];
 
-        return lerp_vectors(t_low_val, t_high_val, turbidity - t_int);
+            res[i] = dr::lerp(t_low_val, t_high_val, turbidity - t_int);
+        }
+
+        return res;
     }
 
 NAMESPACE_END(mitsuba)

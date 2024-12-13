@@ -21,14 +21,14 @@ NAMESPACE_BEGIN(mitsuba)
     #define F_DIM 5
     #define L_DIM 4
 
-    enum class SunDataShapeIdx: uint32_t { WAVELENGTH = 0, TURBIDITY, PIECES, ORDER };
+    enum class SunDataShapeIdx: uint32_t { WAVELENGTH = 0, TURBIDITY, SUN_SEGMENTS, SUN_CTRL_PTS };
     enum class SkyDataShapeIdx: uint32_t { WAVELENGTH = 0, ALBEDO, TURBIDITY, CTRL_PT, PARAMS };
 
-    constexpr size_t solar_shape[4] = {11, NB_TURBIDITY, NB_SUN_SEGMENTS, NB_SUN_CTRL_PTS};
-    constexpr size_t limb_darkening_shape[2] = {11, 6};
+    constexpr size_t solar_shape[4] = {NB_WAVELENGTHS, NB_TURBIDITY, NB_SUN_SEGMENTS, NB_SUN_CTRL_PTS};
+    constexpr size_t limb_darkening_shape[2] = {NB_WAVELENGTHS, 6};
 
-    constexpr size_t f_spec_shape[F_DIM] = {11, NB_ALBEDO, NB_TURBIDITY, NB_SKY_CTRL_PTS, NB_SKY_PARAMS};
-    constexpr size_t l_spec_shape[L_DIM] = {11, NB_ALBEDO, NB_TURBIDITY, NB_SKY_CTRL_PTS};
+    constexpr size_t f_spec_shape[F_DIM] = {NB_WAVELENGTHS, NB_ALBEDO, NB_TURBIDITY, NB_SKY_CTRL_PTS, NB_SKY_PARAMS};
+    constexpr size_t l_spec_shape[L_DIM] = {NB_WAVELENGTHS, NB_ALBEDO, NB_TURBIDITY, NB_SKY_CTRL_PTS};
 
     constexpr size_t f_tri_shape[F_DIM] = {3, NB_ALBEDO, NB_TURBIDITY, NB_SKY_CTRL_PTS, NB_SKY_PARAMS};
     constexpr size_t l_tri_shape[L_DIM] = {3, NB_ALBEDO, NB_TURBIDITY, NB_SKY_CTRL_PTS};
@@ -100,14 +100,17 @@ NAMESPACE_BEGIN(mitsuba)
         file.write(nb_dims);
 
         // Write reordered shapes
+        // as [wavelengths x nb_params]
         file.write(dim_size[0]);
         file.write(dim_size[1]);
 
-        for (size_t w = 0; w < 11; ++w) {
+        for (size_t w = 0; w < NB_WAVELENGTHS; ++w) {
             for (size_t p = 0; p < 6; ++p) {
                 file.write(p_dataset[w][p]);
             }
         }
+
+        file.close();
     }
 
     void write_sun_data(const std::string& path) {
@@ -123,23 +126,24 @@ NAMESPACE_BEGIN(mitsuba)
 
         // Write reordered shapes
         file.write(dim_size[(uint32_t)SunDataShapeIdx::TURBIDITY]);
-        file.write(dim_size[(uint32_t)SunDataShapeIdx::PIECES]);
-        file.write(dim_size[(uint32_t)SunDataShapeIdx::ORDER]);
         file.write(dim_size[(uint32_t)SunDataShapeIdx::WAVELENGTH]);
+        file.write(dim_size[(uint32_t)SunDataShapeIdx::SUN_SEGMENTS]);
+        file.write(dim_size[(uint32_t)SunDataShapeIdx::SUN_CTRL_PTS]);
 
-        for (size_t t = 0; t < NB_TURBIDITY; ++t) {
-            for (size_t p = 0; p < NB_SUN_SEGMENTS; ++p) {
-                for (size_t o = 0; o < NB_SUN_CTRL_PTS; ++o) {
-                    for (size_t w = 0; w < 11; ++w) {
-                        const size_t src_global_offset = t * (NB_SUN_SEGMENTS * NB_SUN_CTRL_PTS) +
-                                                         p * NB_SUN_CTRL_PTS + o;
-                        file.write(p_dataset[w][src_global_offset]);
+        for (size_t turb = 0; turb < NB_TURBIDITY; ++turb) {
+            for (size_t lambda = 0; lambda < NB_WAVELENGTHS; ++lambda) {
+                for (size_t segment = 0; segment < NB_SUN_SEGMENTS; ++segment) {
+                    for (size_t ctrl_pt = 0; ctrl_pt < NB_SUN_CTRL_PTS; ++ctrl_pt) {
+                        const size_t src_global_offset = turb * (NB_SUN_SEGMENTS * NB_SUN_CTRL_PTS) +
+                                                         segment * NB_SUN_CTRL_PTS + ctrl_pt;
+
+                        file.write(p_dataset[lambda][src_global_offset]);
                     }
                 }
             }
         }
 
-
+        file.close();
     }
 
 

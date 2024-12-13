@@ -63,7 +63,7 @@ public:
     using FloatStorage = DynamicBuffer<Float>;
 
     using Gaussian = dr::Array<Float, NB_GAUSSIAN_PARAMS>;
-    using Albedo = std::array<ScalarFloat, is_spectral_v<Spectrum> ? 11 : 3>;
+    using Albedo = std::array<ScalarFloat, is_spectral_v<Spectrum> ? NB_WAVELENGTHS : 3>;
     using SolarRadiance = std::conditional_t<is_spectral_v<Spectrum>,
                                                 ContinuousDistribution<Wavelength>,
                                                 Color3f>;
@@ -116,6 +116,7 @@ public:
         m_sun_ld_dataset = array_from_file<double, ScalarFloat>(DATABASE_PATH DATABASE_PREFIX "_ld_sun.bin");
         m_sun_rad_dataset = array_from_file<double, ScalarFloat>(DATABASE_PATH DATABASE_PREFIX "_solar.bin");
 
+        m_sun_ld = dr::load<FloatStorage>(m_sun_ld_dataset.data(), m_sun_ld_dataset.size());
         update_sun_radiance(turbidity);
 
         // ================= GET TGMM TABLES =================
@@ -178,20 +179,23 @@ public:
 
             SpecMask spec_mask = active & (query_idx >= 0) & (query_idx < NB_CHANNELS);
 
-            res = dr::lerp(
+            res = m_sky_scale * dr::lerp(
                 render_sky(query_idx, cos_theta, cos_gamma, spec_mask),
                 render_sky(dr::minimum(query_idx + 1, NB_CHANNELS - 1), cos_theta, cos_gamma, spec_mask),
                 lerp_factor) * m_d65->eval(si, active) * 465.382521163; // FIXME: explain this factor
+
+            res += m_sun_scale * dr::lerp(
+                render_sun(query_idx, cos_theta, cos_gamma, spec_mask),
+                render_sun(dr::minimum(query_idx + 1, NB_CHANNELS - 1), cos_theta, cos_gamma, spec_mask),
+                lerp_factor);
         }
 
-        res *= m_sky_scale;
-        res += m_sun_scale * render_sun(cos_gamma, si.wavelengths, active);
         return dr::select(active & (res >= 0.f), res, 0.f);
     }
 
     std::pair<Vector3f, Float> sample_sun(const Point2f& sample) const {
-        Vector3f sun_sample = warp::square_to_uniform_cone(sample, m_sun_cos_cutoff);
-        Float pdf = warp::square_to_uniform_cone_pdf(sun_sample, m_sun_cos_cutoff);
+        Vector3f sun_sample = warp::square_to_uniform_cone(sample, SUN_COS_CUTOFF);
+        Float pdf = warp::square_to_uniform_cone_pdf(sun_sample, SUN_COS_CUTOFF);
 
         return { m_local_sun_frame.to_world(sun_sample), pdf };
     }
@@ -249,7 +253,7 @@ public:
         Vector3f local_dir = dr::normalize(m_to_world.value().inverse().transform_affine(ds.d));
         active &= (Frame3f::cos_theta(local_dir) >= 0.f) && (Frame3f::sin_theta(local_dir) != 0.f);
 
-        Float sun_pdf = warp::square_to_uniform_cone_pdf(m_local_sun_frame.to_local(local_dir), m_sun_cos_cutoff);
+        Float sun_pdf = warp::square_to_uniform_cone_pdf(m_local_sun_frame.to_local(local_dir), SUN_COS_CUTOFF);
         Float sky_pdf = tgmm_pdf(local_dir, active);
 
         Float combined_pdf = (m_sky_scale * sky_pdf + m_sun_scale * sun_pdf) / (m_sky_scale + m_sun_scale);
@@ -280,11 +284,11 @@ private:
         DATABASE_PREFIX "_rgb";
 
     static constexpr size_t WAVELENGTH_STEP = 40;
-    static constexpr ScalarFloat WAVELENGTHS[11] = {
+    static constexpr ScalarFloat WAVELENGTHS[NB_WAVELENGTHS] = {
         320, 360, 400, 420, 460, 520, 560, 600, 640, 680, 720
     };
 
-    static constexpr size_t NB_CHANNELS = is_spectral_v<Spectrum> ? 11 : 3,
+    static constexpr size_t NB_CHANNELS = is_spectral_v<Spectrum> ? NB_WAVELENGTHS : 3,
                             DATASET_SIZE = NB_TURBIDITY * NB_ALBEDO * NB_SKY_CTRL_PTS * NB_CHANNELS * NB_SKY_PARAMS,
                             RAD_DATASET_SIZE = NB_TURBIDITY * NB_ALBEDO * NB_SKY_CTRL_PTS * NB_CHANNELS;
 
@@ -298,14 +302,14 @@ private:
     Float m_sun_phi;
     Vector3f m_local_sun_dir;
     Frame3f m_local_sun_frame;
-    Float m_sun_cos_cutoff = dr::cos(dr::deg_to_rad((ScalarFloat) (SUN_APP_RADIUS * 0.5)));
 
     ref<Texture> m_d65;
 
     // Radiance parameters
-    FloatStorage m_params;
+    FloatStorage m_sky_params;
     FloatStorage m_sky_radiance;
-    SolarRadiance m_sun_radiance;
+    FloatStorage m_sun_ld;
+    FloatStorage m_sun_radiance;
 
     // Sampling parameters
     FloatStorage m_gaussians;
@@ -324,7 +328,7 @@ private:
 
         Spectrum coefs[NB_SKY_PARAMS];
         for (uint8_t i = 0; i < NB_SKY_PARAMS; ++i)
-            coefs[i] = dr::gather<Spectrum>(m_params, channel_idx * NB_SKY_PARAMS + i, active);
+            coefs[i] = dr::gather<Spectrum>(m_sky_params, channel_idx * NB_SKY_PARAMS + i, active);
 
         Float gamma = dr::acos(cos_gamma),
               cos_gamma_sqr = dr::square(cos_gamma);
@@ -336,23 +340,30 @@ private:
         return c1 * c2 * dr::gather<Spectrum>(m_sky_radiance, channel_idx, active);
     }
 
-    Spectrum render_sun(const Float& cos_gamma, const Wavelength& wavelengths, const Mask& active) const {
-        Mask hit_sun = cos_gamma >= dr::cos(dr::deg_to_rad((ScalarFloat) (SUN_APP_RADIUS * 0.5)));
+    Spectrum render_sun(const SpecUInt32& channel_idx, const Float& cos_theta, const Float& cos_gamma, const SpecMask& active) const {
+        SpecMask hit_sun = active & (cos_gamma >= SUN_COS_CUTOFF);
+        Float eta = 0.5f * dr::Pi<Float> - dr::acos(cos_theta);
+        Float cos_phi = dr::safe_sqrt(1 - (1 - dr::square(cos_gamma)) / (1 - dr::square(SUN_COS_CUTOFF)));
 
-        Spectrum sun_radiance = 0.f;
-        if constexpr (is_rgb_v<Spectrum>)
-            sun_radiance = m_sun_radiance;
-        else
-            sun_radiance = m_sun_radiance.eval_pdf(wavelengths, active);
+        Int32 pos = dr::floor2int<Int32>(dr::pow(2 * eta * dr::InvPi<Float>, 1.f/3.f) * NB_SUN_SEGMENTS);
+        pos = dr::maximum(1, pos);
 
-        return dr::select(active & hit_sun, sun_radiance, 0.f);
-    }
+        const Float break_x = 0.5f * dr::Pi<Float> * dr::pow((Float) pos / NB_SUN_SEGMENTS, 3.f);
+        const Float x = eta - break_x;
 
-    MI_INLINE Float inv_sin_theta(const Vector3f& local_dir) const {
-        return dr::safe_rsqrt(dr::maximum(
-            dr::square(local_dir.x()) + dr::square(local_dir.y()),
-            dr::square(dr::Epsilon<Float>))
-        );
+        // Compute sun radiance
+        UnpolarizedSpectrum sun_radiance = 0.f;
+        SpecUInt32 sun_idx = channel_idx * NB_SUN_SEGMENTS * NB_SUN_CTRL_PTS + pos * NB_SUN_CTRL_PTS;
+        for (uint8_t k = 0; k < 3; ++k)
+            sun_radiance += dr::gather<Spectrum>(m_sun_radiance, sun_idx + k, hit_sun) * dr::pow(x, 3-k);
+
+
+        // Compute limb darkening
+        UnpolarizedSpectrum sun_ld = 1.f;
+        for (uint8_t i = 0; i < 6; ++i)
+            sun_ld += dr::pow(cos_phi, i) * dr::gather<Spectrum>(m_sun_ld, channel_idx * 6 + i, hit_sun);
+
+        return dr::select(hit_sun, sun_ld * sun_radiance, 0.f);
     }
 
     MI_INLINE Point2f gaussian_cdf(const Point2f& mu, const Point2f& sigma, const Point2f& x) const {
@@ -419,31 +430,8 @@ private:
     }
 
     void update_sun_radiance(ScalarFloat turbidity) {
-        //std::vector<ScalarFloat> sun_radiance = compute_sun_radiance(m_sun_params, sun_theta, turbidity);
-        std::vector<ScalarFloat> sun_radiance = std::vector<ScalarFloat>(91, 0.f);
-
-        compute_sun_params(m_sun_rad_dataset, turbidity);
-
-        if constexpr (is_spectral_v<Spectrum>) {
-            m_sun_radiance = SolarRadiance({350.f, 800.f},
-                                    sun_radiance.data(),
-                                    sun_radiance.size());
-
-        } else if constexpr (is_rgb_v<Spectrum>) {
-            ScalarFloat solarWavelengths[91] = {};
-            FloatStorage value = dr::load<FloatStorage>(sun_radiance.data(), sun_radiance.size()),
-                         wavelengths = dr::load<FloatStorage>(solarWavelengths, 91);
-
-            // Transform solar spectrum computed on 91 wavelengths to RGB
-            Color<FloatStorage, 3> rgb = linear_rgb_rec(wavelengths);
-            m_sun_radiance = { dr::mean(rgb.x() * value),
-                               dr::mean(rgb.y() * value),
-                               dr::mean(rgb.z() * value) };
-            m_sun_radiance *= MI_CIE_Y_NORMALIZATION;
-
-        } else {
-            Throw("Unsupported spectrum type");
-        }
+        std::vector<ScalarFloat> sun_radiance = compute_sun_params(m_sun_rad_dataset, turbidity);
+        m_sun_radiance = dr::load<FloatStorage>(sun_radiance.data(), sun_radiance.size());
 
         dr::make_opaque(m_sun_radiance);
     }
@@ -503,10 +491,10 @@ private:
                 params = compute_radiance_params(m_sky_dataset, albedo, turbidity, eta),
                 radiance = compute_radiance_params(m_sky_rad_dataset, albedo, turbidity, eta);
 
-        m_params = dr::load<FloatStorage>(params.data(), params.size());
+        m_sky_params = dr::load<FloatStorage>(params.data(), params.size());
         m_sky_radiance = dr::load<FloatStorage>(radiance.data(), radiance.size());
 
-        dr::make_opaque(m_params, m_sky_radiance);
+        dr::make_opaque(m_sky_params, m_sky_radiance);
     }
 
     Albedo extract_albedo(const ref<Texture>& albedo) const {

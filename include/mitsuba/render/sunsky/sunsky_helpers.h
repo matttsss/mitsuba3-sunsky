@@ -5,6 +5,7 @@
 
 #include <vector>
 
+#define NB_WAVELENGTHS 11
 #define NB_TURBIDITY 10
 #define NB_ALBEDO 2
 

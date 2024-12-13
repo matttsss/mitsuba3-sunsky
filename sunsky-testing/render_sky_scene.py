@@ -20,7 +20,7 @@ def render_scene(t, a, eta, phi_sun):
             'type': 'spherical',
             'sampler': {
                 'type': 'independent',
-                'sample_count': 1024
+                'sample_count': 512
             },
             'film': {
                 'type': 'hdrfilm',
@@ -31,20 +31,20 @@ def render_scene(t, a, eta, phi_sun):
         'emitter': {
             'type': 'sunsky',
             'sunDirection': [cp * st, sp * st, ct],
-            'sunScale': 0.0,
+            'sunScale': 1.0,
             'turbidity': t,
             'albedo': a,
         }
     }
 
     scene = mi.load_dict(scene)
-    return mi.render(scene, spp=1024)
+    return mi.render(scene, spp=512)
 
 
 
 def render_and_write_scene(scene_name):
-    t, a = 2.5, 0.0
-    eta = dr.deg2rad(22.5)
+    t, a = 3.2, 0.0
+    eta = dr.deg2rad(75)
     phi_sun = -4*dr.pi/5
     image = render_scene(t, a, eta, phi_sun)
 
@@ -52,6 +52,6 @@ def render_and_write_scene(scene_name):
     mi.util.write_bitmap(f"sunsky-testing/res/renders/{scene_name}.exr", image)
 
 if __name__ == "__main__":
-    mi.set_variant("llvm_rgb")
+    mi.set_variant("cuda_spectral")
     dr.set_log_level(dr.LogLevel.Warn)
     render_and_write_scene("test_sun")

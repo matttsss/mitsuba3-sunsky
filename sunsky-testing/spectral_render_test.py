@@ -10,7 +10,7 @@ import mitsuba as mi
 mi.set_variant("cuda_spectral")
 
 from helpers import get_north_hemisphere_rays
-from render_scene import render_scene
+from render_sky_scene import render_scene
 
 
 def test_spectral_constants():
