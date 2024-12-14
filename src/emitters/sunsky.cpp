@@ -170,7 +170,10 @@ public:
             // dr::width(idx) == 1
             SpecUInt32 idx = SpecUInt32({0, 1, 2});
 
-            res = render_sky(idx, cos_theta, cos_gamma, active) * MI_CIE_Y_NORMALIZATION;
+            res = m_sky_scale * render_sky(idx, cos_theta, cos_gamma, active);
+            res += m_sun_scale * render_sun(idx, cos_theta, cos_gamma, active);
+
+            res *= MI_CIE_Y_NORMALIZATION;
 
         } else {
             Spectrum normalized_wavelengths = (si.wavelengths - WAVELENGTHS[0]) / WAVELENGTH_STEP;
@@ -285,11 +288,6 @@ private:
         DATABASE_PREFIX "_spec" :
         DATABASE_PREFIX "_rgb";
 
-    static constexpr size_t WAVELENGTH_STEP = 40;
-    static constexpr ScalarFloat WAVELENGTHS[NB_WAVELENGTHS] = {
-        320, 360, 400, 420, 460, 520, 560, 600, 640, 680, 720
-    };
-
     static constexpr size_t NB_CHANNELS = is_spectral_v<Spectrum> ? NB_WAVELENGTHS : 3,
                             DATASET_SIZE = NB_TURBIDITY * NB_ALBEDO * NB_SKY_CTRL_PTS * NB_CHANNELS * NB_SKY_PARAMS,
                             RAD_DATASET_SIZE = NB_TURBIDITY * NB_ALBEDO * NB_SKY_CTRL_PTS * NB_CHANNELS;
@@ -355,19 +353,34 @@ private:
         const Float break_x = 0.5f * dr::Pi<Float> * dr::pow((Float)(pos) / NB_SUN_SEGMENTS, 3.f);
         const Float x = elevation - break_x;
 
-        // Compute sun radiance
-        UnpolarizedSpectrum sun_radiance = 0.f;
-        SpecUInt32 sun_idx = channel_idx * NB_SUN_SEGMENTS * NB_SUN_CTRL_PTS + pos * NB_SUN_CTRL_PTS;
-        for (uint8_t k = 0; k < 3; ++k)
-            sun_radiance += dr::gather<Spectrum>(m_sun_radiance, sun_idx + k, hit_sun) * dr::pow(x, k);
+        UnpolarizedSpectrum solar_radiance = 0.f;
+        if constexpr (is_spectral_v<Spectrum>) {
+            // Compute sun radiance
+            UnpolarizedSpectrum sun_radiance = 0.f;
+            SpecUInt32 sun_idx = channel_idx * NB_SUN_SEGMENTS * NB_SUN_CTRL_PTS + pos * NB_SUN_CTRL_PTS;
+            for (uint8_t k = 0; k < NB_SUN_CTRL_PTS; ++k)
+                sun_radiance += dr::gather<Spectrum>(m_sun_radiance, sun_idx + k, hit_sun) * dr::pow(x, k);
 
 
-        // Compute limb darkening
-        UnpolarizedSpectrum sun_ld = 0.f;
-        for (uint8_t i = 0; i < 6; ++i)
-            sun_ld += dr::pow(cos_phi, i) * dr::gather<Spectrum>(m_sun_ld, channel_idx * 6 + i, hit_sun);
+            // Compute limb darkening
+            UnpolarizedSpectrum sun_ld = 0.f;
+            for (uint8_t i = 0; i < NB_SUN_LD_PARAMS; ++i)
+                sun_ld += dr::pow(cos_phi, i) * dr::gather<Spectrum>(m_sun_ld, channel_idx * NB_SUN_LD_PARAMS + i, hit_sun);
 
-        UnpolarizedSpectrum solar_radiance = sun_ld * sun_radiance;
+            solar_radiance = sun_ld * sun_radiance;
+
+        } else {
+            SpecUInt32 global_idx = channel_idx * (NB_SUN_SEGMENTS * NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS) +
+                                    pos * (NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS);
+
+            for (uint8_t k = 0; k < NB_SUN_CTRL_PTS; ++k)
+                for (uint8_t j = 0; j < NB_SUN_LD_PARAMS; ++j)
+                    solar_radiance += dr::pow(x, k) * dr::pow(cos_phi, j) *
+                        dr::gather<Spectrum>(m_sun_radiance, global_idx + k * NB_SUN_LD_PARAMS + j, hit_sun);
+
+        }
+
+
         return dr::select(hit_sun & (solar_radiance > 0.f), solar_radiance, Spectrum(0.f));
     }
 
@@ -435,9 +448,13 @@ private:
     }
 
     void update_sun_radiance(ScalarFloat turbidity) {
-        std::vector<ScalarFloat> sun_radiance = compute_sun_params(m_sun_rad_dataset, turbidity);
-        m_sun_radiance = dr::load<FloatStorage>(sun_radiance.data(), sun_radiance.size());
+        std::vector<ScalarFloat> sun_radiance;
+        if constexpr (is_spectral_v<Spectrum>)
+            sun_radiance = compute_sun_params_spectral(m_sun_rad_dataset, turbidity);
+        else
+            sun_radiance = compute_sun_params_rgb(m_sun_rad_dataset, m_sun_ld_dataset, turbidity);
 
+        m_sun_radiance = dr::load<FloatStorage>(sun_radiance.data(), sun_radiance.size());
         dr::make_opaque(m_sun_radiance);
     }
 

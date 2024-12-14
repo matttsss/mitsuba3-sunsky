@@ -9,11 +9,17 @@
 #define NB_TURBIDITY 10
 #define NB_ALBEDO 2
 
+static constexpr size_t WAVELENGTH_STEP = 40;
+static constexpr float WAVELENGTHS[NB_WAVELENGTHS] = {
+    320, 360, 400, 420, 460, 520, 560, 600, 640, 680, 720
+};
+
 #define NB_SKY_CTRL_PTS 6
 #define NB_SKY_PARAMS 9
 
 #define NB_SUN_CTRL_PTS 4
 #define NB_SUN_SEGMENTS 45
+#define NB_SUN_LD_PARAMS 6
 
 
 NAMESPACE_BEGIN(mitsuba)
