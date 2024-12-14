@@ -8,8 +8,6 @@
 #define EARTH_MEAN_RADIUS 6371.01   // In km
 #define ASTRONOMICAL_UNIT 149597890 // In km
 
-#define SUN_COS_CUTOFF (Float) dr::cos(dr::deg_to_rad((ScalarFloat) (SUN_APP_RADIUS * 0.5)))
-
 NAMESPACE_BEGIN(mitsuba)
 
     // ================================================================================================

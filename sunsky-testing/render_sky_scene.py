@@ -19,8 +19,7 @@ def render_scene(t, a, eta, phi_sun):
         'sensor': {
             'type': 'spherical',
             'sampler': {
-                'type': 'independent',
-                'sample_count': 512
+                'type': 'independent'
             },
             'film': {
                 'type': 'hdrfilm',
@@ -53,5 +52,6 @@ def render_and_write_scene(scene_name):
 
 if __name__ == "__main__":
     mi.set_variant("cuda_spectral")
+    mi.write_sun_sky_model_data("sunsky-testing/res/datasets/ssm_dataset")
     dr.set_log_level(dr.LogLevel.Warn)
     render_and_write_scene("test_sun")

@@ -182,20 +182,22 @@ public:
             res = m_sky_scale * dr::lerp(
                 render_sky(query_idx, cos_theta, cos_gamma, spec_mask),
                 render_sky(dr::minimum(query_idx + 1, NB_CHANNELS - 1), cos_theta, cos_gamma, spec_mask),
-                lerp_factor) * m_d65->eval(si, active) * 465.382521163; // FIXME: explain this factor
+                lerp_factor); // FIXME: explain this factor * 465.382521163
 
             res += m_sun_scale * dr::lerp(
                 render_sun(query_idx, cos_theta, cos_gamma, spec_mask),
                 render_sun(dr::minimum(query_idx + 1, NB_CHANNELS - 1), cos_theta, cos_gamma, spec_mask),
                 lerp_factor);
+
+            res *= m_d65->eval(si, active);
         }
 
         return dr::select(active & (res >= 0.f), res, 0.f);
     }
 
     std::pair<Vector3f, Float> sample_sun(const Point2f& sample) const {
-        Vector3f sun_sample = warp::square_to_uniform_cone(sample, SUN_COS_CUTOFF);
-        Float pdf = warp::square_to_uniform_cone_pdf(sun_sample, SUN_COS_CUTOFF);
+        Vector3f sun_sample = warp::square_to_uniform_cone(sample, m_sun_cos_cutoff);
+        Float pdf = warp::square_to_uniform_cone_pdf(sun_sample, m_sun_cos_cutoff);
 
         return { m_local_sun_frame.to_world(sun_sample), pdf };
     }
@@ -253,7 +255,7 @@ public:
         Vector3f local_dir = dr::normalize(m_to_world.value().inverse().transform_affine(ds.d));
         active &= (Frame3f::cos_theta(local_dir) >= 0.f) && (Frame3f::sin_theta(local_dir) != 0.f);
 
-        Float sun_pdf = warp::square_to_uniform_cone_pdf(m_local_sun_frame.to_local(local_dir), SUN_COS_CUTOFF);
+        Float sun_pdf = warp::square_to_uniform_cone_pdf(m_local_sun_frame.to_local(local_dir), m_sun_cos_cutoff);
         Float sky_pdf = tgmm_pdf(local_dir, active);
 
         Float combined_pdf = (m_sky_scale * sky_pdf + m_sun_scale * sun_pdf) / (m_sky_scale + m_sun_scale);
@@ -291,6 +293,8 @@ private:
     static constexpr size_t NB_CHANNELS = is_spectral_v<Spectrum> ? NB_WAVELENGTHS : 3,
                             DATASET_SIZE = NB_TURBIDITY * NB_ALBEDO * NB_SKY_CTRL_PTS * NB_CHANNELS * NB_SKY_PARAMS,
                             RAD_DATASET_SIZE = NB_TURBIDITY * NB_ALBEDO * NB_SKY_CTRL_PTS * NB_CHANNELS;
+
+    const Float m_sun_cos_cutoff = (Float) dr::cos(dr::deg_to_rad((ScalarFloat) (SUN_APP_RADIUS * 0.5)));
 
     Float m_surface_area;
     BoundingSphere3f m_bsphere;
@@ -341,29 +345,30 @@ private:
     }
 
     Spectrum render_sun(const SpecUInt32& channel_idx, const Float& cos_theta, const Float& cos_gamma, const SpecMask& active) const {
-        SpecMask hit_sun = active & (cos_gamma >= SUN_COS_CUTOFF);
-        Float eta = 0.5f * dr::Pi<Float> - dr::acos(cos_theta);
-        Float cos_phi = dr::safe_sqrt(1 - (1 - dr::square(cos_gamma)) / (1 - dr::square(SUN_COS_CUTOFF)));
+        SpecMask hit_sun = active & (cos_gamma >= m_sun_cos_cutoff);
+        Float elevation =  0.5f * dr::Pi<Float> - dr::acos(cos_theta);
+        Float cos_phi = dr::safe_sqrt(1 - (1 - dr::square(cos_gamma)) / (1 - dr::square(m_sun_cos_cutoff)));
 
-        Int32 pos = dr::floor2int<Int32>(dr::pow(2 * eta * dr::InvPi<Float>, 1.f/3.f) * NB_SUN_SEGMENTS);
-        pos = dr::maximum(1, pos);
+        UInt32 pos = dr::floor2int<UInt32>(dr::pow(2 * elevation * dr::InvPi<Float>, 1.f/3.f) * NB_SUN_SEGMENTS);
+        pos = dr::minimum(pos, NB_SUN_SEGMENTS - 1);
 
-        const Float break_x = 0.5f * dr::Pi<Float> * dr::pow((Float) pos / NB_SUN_SEGMENTS, 3.f);
-        const Float x = eta - break_x;
+        const Float break_x = 0.5f * dr::Pi<Float> * dr::pow((Float)(pos) / NB_SUN_SEGMENTS, 3.f);
+        const Float x = elevation - break_x;
 
         // Compute sun radiance
         UnpolarizedSpectrum sun_radiance = 0.f;
         SpecUInt32 sun_idx = channel_idx * NB_SUN_SEGMENTS * NB_SUN_CTRL_PTS + pos * NB_SUN_CTRL_PTS;
         for (uint8_t k = 0; k < 3; ++k)
-            sun_radiance += dr::gather<Spectrum>(m_sun_radiance, sun_idx + k, hit_sun) * dr::pow(x, 3-k);
+            sun_radiance += dr::gather<Spectrum>(m_sun_radiance, sun_idx + k, hit_sun) * dr::pow(x, k);
 
 
         // Compute limb darkening
-        UnpolarizedSpectrum sun_ld = 1.f;
+        UnpolarizedSpectrum sun_ld = 0.f;
         for (uint8_t i = 0; i < 6; ++i)
             sun_ld += dr::pow(cos_phi, i) * dr::gather<Spectrum>(m_sun_ld, channel_idx * 6 + i, hit_sun);
 
-        return dr::select(hit_sun, sun_ld * sun_radiance, 0.f);
+        UnpolarizedSpectrum solar_radiance = sun_ld * sun_radiance;
+        return dr::select(hit_sun & (solar_radiance > 0.f), solar_radiance, Spectrum(0.f));
     }
 
     MI_INLINE Point2f gaussian_cdf(const Point2f& mu, const Point2f& sigma, const Point2f& x) const {

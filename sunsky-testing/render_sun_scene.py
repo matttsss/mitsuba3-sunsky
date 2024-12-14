@@ -17,14 +17,13 @@ def render_scene(t, a, eta, phi_sun):
         'sensor': {
             'type': 'perspective',
             'to_world': mi.ScalarTransform4f().look_at([0, 0, 0], [cp * st, sp * st, ct], [0, 0, 1]),
-            'fov': 10,
+            'fov': 1,
             'sampler': {
                 'type': 'independent',
-                'sample_count': 512
             },
             'film': {
                 'type': 'hdrfilm',
-                'width': 1024,
+                'width': 512,
                 'height': 512,
             }
         },
@@ -42,8 +41,8 @@ def render_scene(t, a, eta, phi_sun):
 
 
 def render_and_write_scene(scene_name):
-    t, a = 3.2, 0.0
-    eta = dr.deg2rad(2.1)
+    t, a = 8, 0.5
+    eta = dr.deg2rad(0.9)
     phi_sun = -4*dr.pi/5
     image = render_scene(t, a, eta, phi_sun)
 
@@ -52,5 +51,6 @@ def render_and_write_scene(scene_name):
 
 if __name__ == "__main__":
     mi.set_variant("cuda_spectral")
+    mi.write_sun_sky_model_data("sunsky-testing/res/datasets/ssm_dataset")
     dr.set_log_level(dr.LogLevel.Warn)
     render_and_write_scene("test_sun")

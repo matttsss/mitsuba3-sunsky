@@ -104,11 +104,8 @@ NAMESPACE_BEGIN(mitsuba)
         file.write(dim_size[0]);
         file.write(dim_size[1]);
 
-        for (size_t w = 0; w < NB_WAVELENGTHS; ++w) {
-            for (size_t p = 0; p < 6; ++p) {
-                file.write(p_dataset[w][p]);
-            }
-        }
+        for (size_t w = 0; w < NB_WAVELENGTHS; ++w)
+            file.write(p_dataset[w], 6 * sizeof(double));
 
         file.close();
     }
@@ -134,8 +131,9 @@ NAMESPACE_BEGIN(mitsuba)
             for (size_t lambda = 0; lambda < NB_WAVELENGTHS; ++lambda) {
                 for (size_t segment = 0; segment < NB_SUN_SEGMENTS; ++segment) {
                     for (size_t ctrl_pt = 0; ctrl_pt < NB_SUN_CTRL_PTS; ++ctrl_pt) {
+                        // Weird indices since their dataset goes backwards on the last index
                         const size_t src_global_offset = turb * (NB_SUN_SEGMENTS * NB_SUN_CTRL_PTS) +
-                                                         segment * NB_SUN_CTRL_PTS + ctrl_pt;
+                                                         (segment + 1) * NB_SUN_CTRL_PTS - (ctrl_pt + 1);
 
                         file.write(p_dataset[lambda][src_global_offset]);
                     }
