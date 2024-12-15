@@ -107,16 +107,19 @@ public:
                     sun_eta = 0.5f * dr::Pi<ScalarFloat> - sun_theta;
 
         // ================= GET SKY RADIANCE =================
-        m_sky_dataset = array_from_file<double, ScalarFloat>(DATABASE_PATH + SKY_DATASET_NAME + ".bin");
-        m_sky_rad_dataset = array_from_file<double, ScalarFloat>(DATABASE_PATH + SKY_DATASET_NAME + "_rad.bin");
+        m_sky_dataset = array_from_file<double, ScalarFloat>(DATABASE_PATH + DATASET_NAME + ".bin");
+        m_sky_rad_dataset = array_from_file<double, ScalarFloat>(DATABASE_PATH + DATASET_NAME + "_rad.bin");
 
         update_radiance_params(albedo_buff, turbidity, sun_eta);
 
         // ================= GET SUN RADIANCE =================
-        m_sun_ld_dataset = array_from_file<double, ScalarFloat>(DATABASE_PATH DATABASE_PREFIX "_ld_sun.bin");
-        m_sun_rad_dataset = array_from_file<double, ScalarFloat>(DATABASE_PATH DATABASE_PREFIX "_solar.bin");
+        m_sun_rad_dataset = array_from_file<double, ScalarFloat>(DATABASE_PATH + DATASET_NAME + "_solar.bin");
+        // Only used in spectral mode since limb darkening is baked in the RGB dataset
+        if constexpr (is_spectral_v<Spectrum>) {
+            m_sun_ld_dataset = array_from_file<double, ScalarFloat>(DATABASE_PATH DATABASE_PREFIX "_ld_sun.bin");
+            m_sun_ld = dr::load<FloatStorage>(m_sun_ld_dataset.data(), m_sun_ld_dataset.size());
+        }
 
-        m_sun_ld = dr::load<FloatStorage>(m_sun_ld_dataset.data(), m_sun_ld_dataset.size());
         update_sun_radiance(turbidity);
 
         // ================= GET TGMM TABLES =================
@@ -284,7 +287,7 @@ public:
     MI_DECLARE_CLASS()
 private:
 
-    const std::string SKY_DATASET_NAME = is_spectral_v<Spectrum> ?
+    const std::string DATASET_NAME = is_spectral_v<Spectrum> ?
         DATABASE_PREFIX "_spec" :
         DATABASE_PREFIX "_rgb";
 
@@ -357,21 +360,22 @@ private:
         if constexpr (is_spectral_v<Spectrum>) {
             // Compute sun radiance
             UnpolarizedSpectrum sun_radiance = 0.f;
-            SpecUInt32 sun_idx = channel_idx * NB_SUN_SEGMENTS * NB_SUN_CTRL_PTS + pos * NB_SUN_CTRL_PTS;
+            SpecUInt32 global_idx = pos * NB_WAVELENGTHS * NB_SUN_CTRL_PTS + channel_idx * NB_SUN_CTRL_PTS;
             for (uint8_t k = 0; k < NB_SUN_CTRL_PTS; ++k)
-                sun_radiance += dr::gather<Spectrum>(m_sun_radiance, sun_idx + k, hit_sun) * dr::pow(x, k);
+                sun_radiance += dr::pow(x, k) * dr::gather<Spectrum>(m_sun_radiance, global_idx + k, hit_sun);
 
 
             // Compute limb darkening
             UnpolarizedSpectrum sun_ld = 0.f;
-            for (uint8_t i = 0; i < NB_SUN_LD_PARAMS; ++i)
-                sun_ld += dr::pow(cos_phi, i) * dr::gather<Spectrum>(m_sun_ld, channel_idx * NB_SUN_LD_PARAMS + i, hit_sun);
+            global_idx = channel_idx * NB_SUN_LD_PARAMS;
+            for (uint8_t j = 0; j < NB_SUN_LD_PARAMS; ++j)
+                sun_ld += dr::pow(cos_phi, j) * dr::gather<Spectrum>(m_sun_ld, global_idx + j, hit_sun);
 
             solar_radiance = sun_ld * sun_radiance;
 
         } else {
-            SpecUInt32 global_idx = channel_idx * (NB_SUN_SEGMENTS * NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS) +
-                                    pos * (NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS);
+            SpecUInt32 global_idx = pos * (3 * NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS) +
+                                    channel_idx * (NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS);
 
             for (uint8_t k = 0; k < NB_SUN_CTRL_PTS; ++k)
                 for (uint8_t j = 0; j < NB_SUN_LD_PARAMS; ++j)
@@ -448,12 +452,7 @@ private:
     }
 
     void update_sun_radiance(ScalarFloat turbidity) {
-        std::vector<ScalarFloat> sun_radiance;
-        if constexpr (is_spectral_v<Spectrum>)
-            sun_radiance = compute_sun_params_spectral(m_sun_rad_dataset, turbidity);
-        else
-            sun_radiance = compute_sun_params_rgb(m_sun_rad_dataset, m_sun_ld_dataset, turbidity);
-
+        std::vector<ScalarFloat> sun_radiance = compute_sun_params(m_sun_rad_dataset, turbidity);
         m_sun_radiance = dr::load<FloatStorage>(sun_radiance.data(), sun_radiance.size());
         dr::make_opaque(m_sun_radiance);
     }

@@ -7,7 +7,9 @@
 #include "ArHosekSkyModelData_Spectral.h"
 #include "ArHosekSkyModelData_RGB.h"
 #include "ArHosekSkyModelData_CIEXYZ.h"
+
 #include <mitsuba/core/fstream.h>
+#include <mitsuba/core/spectrum.h>
 
 #include <drjit/dynamic.h>
 #include <drjit/tensor.h>
@@ -110,7 +112,71 @@ NAMESPACE_BEGIN(mitsuba)
         file.close();
     }
 
-    void write_sun_data(const std::string& path) {
+
+void write_sun_data_rgb(const std::string& path) {
+        const auto [nb_dims_solar, dim_size_solar, p_dataset_solar] = solar_dataset;
+        const auto [nb_dims_ld, dim_size_ld, p_dataset_ld] = limb_darkening_dataset;
+        FileStream file(path, FileStream::EMode::ETruncReadWrite);
+
+        // Write headers
+        file.write("SUN", 3);
+        file.write((uint32_t)0);
+
+        // Write tensor dimensions
+        file.write((size_t) 5);
+
+        // Write reordered shapes
+        file.write((size_t) NB_TURBIDITY);
+        file.write((size_t) NB_SUN_SEGMENTS);
+        file.write((size_t) 3); // RGB channels
+        file.write((size_t) NB_SUN_CTRL_PTS);
+        file.write((size_t) NB_SUN_LD_PARAMS);
+
+        double* buffer = (double*)calloc(NB_TURBIDITY * NB_SUN_SEGMENTS * 3 * NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS, sizeof(double));
+
+
+
+        for (size_t turb = 0; turb < NB_TURBIDITY; ++turb) {
+
+            for (size_t segment = 0; segment < NB_SUN_SEGMENTS; ++segment) {
+
+                for (size_t rgb_idx = 0; rgb_idx < 3; ++rgb_idx) {
+
+                    for (size_t ctrl_pt = 0; ctrl_pt < NB_SUN_CTRL_PTS; ++ctrl_pt) {
+                        // Weird indices since their dataset goes backwards on the last index
+                        const size_t sun_rad_idx = turb * (NB_SUN_SEGMENTS * NB_SUN_CTRL_PTS) +
+                                                      (segment + 1) * NB_SUN_CTRL_PTS - (ctrl_pt + 1);
+
+                        for (size_t ld_param_idx = 0; ld_param_idx < NB_SUN_LD_PARAMS; ++ld_param_idx) {
+
+
+                            const size_t dst_idx = turb * (NB_SUN_SEGMENTS * 3 * NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS) +
+                                                   segment * (3 * NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS) +
+                                                   rgb_idx * (NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS) +
+                                                   ctrl_pt * NB_SUN_LD_PARAMS +
+                                                   ld_param_idx;
+
+
+                            for (size_t lambda = 0; lambda < NB_WAVELENGTHS; ++lambda) {
+                                const double rectifier = (double) linear_rgb_rec(WAVELENGTHS[lambda])[rgb_idx];
+
+                                buffer[dst_idx] += rectifier * p_dataset_solar[lambda][sun_rad_idx] *
+                                                        p_dataset_ld[lambda][ld_param_idx];
+                            }
+
+                            buffer[dst_idx] /= NB_WAVELENGTHS;
+                        }
+                    }
+                }
+            }
+        }
+
+        file.write_array(buffer, NB_TURBIDITY * NB_SUN_SEGMENTS * 3 * NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS);
+        file.close();
+        free(buffer);
+    }
+
+    void write_sun_data_spectral(const std::string& path) {
         const auto [nb_dims, dim_size, p_dataset] = solar_dataset;
         FileStream file(path, FileStream::EMode::ETruncReadWrite);
 
@@ -128,8 +194,8 @@ NAMESPACE_BEGIN(mitsuba)
         file.write(dim_size[(uint32_t)SunDataShapeIdx::SUN_CTRL_PTS]);
 
         for (size_t turb = 0; turb < NB_TURBIDITY; ++turb) {
-            for (size_t lambda = 0; lambda < NB_WAVELENGTHS; ++lambda) {
-                for (size_t segment = 0; segment < NB_SUN_SEGMENTS; ++segment) {
+            for (size_t segment = 0; segment < NB_SUN_SEGMENTS; ++segment) {
+                for (size_t lambda = 0; lambda < NB_WAVELENGTHS; ++lambda) {
                     for (size_t ctrl_pt = 0; ctrl_pt < NB_SUN_CTRL_PTS; ++ctrl_pt) {
                         // Weird indices since their dataset goes backwards on the last index
                         const size_t src_global_offset = turb * (NB_SUN_SEGMENTS * NB_SUN_CTRL_PTS) +
@@ -217,7 +283,8 @@ NAMESPACE_BEGIN(mitsuba)
         write_sky_data(path + "_rgb_rad.bin", l_RGB);
         write_sky_data(path + "_xyz.bin", f_XYZ);
         write_sky_data(path + "_xyz_rad.bin", l_XYZ);
-        write_sun_data(path + "_solar.bin");
+        write_sun_data_spectral(path + "_spec_solar.bin");
+        write_sun_data_rgb(path + "_rgb_solar.bin");
         write_limb_darkening_data(path + "_ld_sun.bin");
     }
 
