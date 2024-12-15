@@ -107,7 +107,7 @@ public:
         m_sky_dataset = array_from_file<double, ScalarFloat>(DATABASE_PATH + DATASET_NAME + ".bin");
         m_sky_rad_dataset = array_from_file<double, ScalarFloat>(DATABASE_PATH + DATASET_NAME + "_rad.bin");
 
-        update_radiance_params(albedo_buff, turbidity, sun_eta);
+        update_sky_radiance(albedo_buff, turbidity, sun_eta);
 
         // ================= GET SUN RADIANCE =================
         m_sun_rad_dataset = array_from_file<double, ScalarFloat>(DATABASE_PATH + DATASET_NAME + "_solar.bin");
@@ -137,6 +137,8 @@ public:
     void traverse(TraversalCallback *callback) override {
         Base::traverse(callback);
         callback->put_parameter("turbidity", m_turbidity, +ParamFlags::Differentiable);
+        callback->put_parameter("sky_scale", m_sky_scale, +ParamFlags::NonDifferentiable);
+        callback->put_parameter("sun_scale", m_sun_scale, +ParamFlags::NonDifferentiable);
     }
 
     void set_scene(const Scene *scene) override {
@@ -199,20 +201,6 @@ public:
         }
 
         return dr::select(active & (res >= 0.f), res, 0.f);
-    }
-
-    std::pair<Vector3f, Float> sample_sun(const Point2f& sample) const {
-        Vector3f sun_sample = warp::square_to_uniform_cone(sample, m_sun_cos_cutoff);
-        Float pdf = warp::square_to_uniform_cone_pdf(sun_sample, m_sun_cos_cutoff);
-
-        return { m_local_sun_frame.to_world(sun_sample), pdf };
-    }
-
-    std::pair<Vector3f, Float> sample_sky(const Point2f& sample, const Mask& active) const {
-        Vector3f sky_sample = tgmm_sample(sample, active);
-        Float pdf = tgmm_pdf(sky_sample, active);
-
-        return { sky_sample, pdf };
     }
 
 
@@ -279,6 +267,8 @@ public:
         oss << "SunskyEmitter[" << std::endl
             << "  bsphere = " << string::indent(m_bsphere) << std::endl
             << "  turbidity = " << string::indent(m_turbidity) << std::endl
+            << "  sky_scale = " << string::indent(m_sky_scale) << std::endl
+            << "  sun_scale = " << string::indent(m_sun_scale) << std::endl
             << "]";
         return oss.str();
     }
@@ -291,9 +281,7 @@ private:
         DATABASE_PREFIX "_spec" :
         DATABASE_PREFIX "_rgb";
 
-    static constexpr size_t NB_CHANNELS = is_spectral_v<Spectrum> ? NB_WAVELENGTHS : 3,
-                            DATASET_SIZE = NB_TURBIDITY * NB_ALBEDO * NB_SKY_CTRL_PTS * NB_CHANNELS * NB_SKY_PARAMS,
-                            RAD_DATASET_SIZE = NB_TURBIDITY * NB_ALBEDO * NB_SKY_CTRL_PTS * NB_CHANNELS;
+    static constexpr size_t NB_CHANNELS = is_spectral_v<Spectrum> ? NB_WAVELENGTHS : 3;
 
     const Float m_sun_cos_cutoff = (Float) dr::cos(dr::deg_to_rad((ScalarFloat) (SUN_APP_RADIUS * 0.5)));
 
@@ -392,6 +380,40 @@ private:
         return 0.5f * (1 + dr::erf(dr::InvSqrtTwo<Float> * (x - mu) / sigma));
     }
 
+    std::pair<Vector3f, Float> sample_sky(const Point2f& sample_, const Mask& active) const {
+        const auto [idx, temp_sample] = m_gaussian_distr.sample_reuse(sample_.x(), active);
+
+        Point2f sample = {temp_sample, sample_.y()};
+
+        Gaussian gaussian = dr::gather<Gaussian>(m_gaussians, idx, active);
+
+        const Point2f a = { 0.0 },
+                      b = { dr::TwoPi<Float>, 0.5f * dr::Pi<Float> };
+
+        const Point2f mu    = { gaussian[0], gaussian[1] },
+                      sigma = { gaussian[2], gaussian[3] };
+
+        const Point2f cdf_a = gaussian_cdf(mu, sigma, a),
+                      cdf_b = gaussian_cdf(mu, sigma, b);
+
+        sample = dr::lerp(cdf_a, cdf_b, sample);
+        Point2f angles = dr::SqrtTwo<Float> * dr::erfinv(2 * sample - 1) * sigma + mu;
+        // From fixed reference frame where sun_phi = pi/2 to local frame
+        angles.x() += m_sun_phi - 0.5f * dr::Pi<Float>;
+
+        Vector3f sky_sample = dr::normalize(to_spherical(angles));
+        Float pdf = tgmm_pdf(sky_sample, active);
+
+        return { sky_sample, pdf };
+    }
+
+    std::pair<Vector3f, Float> sample_sun(const Point2f& sample) const {
+        Vector3f sun_sample = warp::square_to_uniform_cone(sample, m_sun_cos_cutoff);
+        Float pdf = warp::square_to_uniform_cone_pdf(sun_sample, m_sun_cos_cutoff);
+
+        return { m_local_sun_frame.to_world(sun_sample), pdf };
+    }
+
     Float tgmm_pdf(const Vector3f& direction, Mask active) const {
 
         Point2f angles = from_spherical(direction);
@@ -427,41 +449,19 @@ private:
         return dr::select(active, pdf, 0.0);
     }
 
-    Vector3f tgmm_sample(const Point2f& sample_, const Mask& active) const {
-        auto [idx, temp_sample] = m_gaussian_distr.sample_reuse(sample_.x(), active);
-
-        Point2f sample = {temp_sample, sample_.y()};
-
-        Gaussian gaussian = dr::gather<Gaussian>(m_gaussians, idx, active);
-
-        const Point2f a = { 0.0 },
-                      b = { dr::TwoPi<Float>, 0.5f * dr::Pi<Float> };
-
-        const Point2f mu    = { gaussian[0], gaussian[1] },
-                      sigma = { gaussian[2], gaussian[3] };
-
-        const Point2f cdf_a = gaussian_cdf(mu, sigma, a),
-                      cdf_b = gaussian_cdf(mu, sigma, b);
-
-        sample = dr::lerp(cdf_a, cdf_b, sample);
-        Point2f angles = dr::SqrtTwo<Float> * dr::erfinv(2 * sample - 1) * sigma + mu;
-        // From fixed reference frame where sun_phi = pi/2 to local frame
-        angles.x() += m_sun_phi - 0.5f * dr::Pi<Float>;
-
-        return dr::normalize(to_spherical(angles));
-    }
-
     void update_sun_radiance(ScalarFloat turbidity) {
         std::vector<ScalarFloat> sun_radiance = compute_sun_params(m_sun_rad_dataset, turbidity);
+
         m_sun_radiance = dr::load<FloatStorage>(sun_radiance.data(), sun_radiance.size());
+
         dr::make_opaque(m_sun_radiance);
     }
 
-    void update_tgmm_distribution(ScalarFloat t, ScalarFloat eta) {
+    void update_tgmm_distribution(ScalarFloat turbidity, ScalarFloat eta) {
 
         eta = dr::rad_to_deg(eta);
         ScalarFloat eta_idx_f = dr::clip((eta - 2) / 3, 0, NB_ETAS - 1),
-                    t_idx_f = dr::clip(t - 2, 0, (NB_TURBIDITY - 1) - 1);
+                    t_idx_f = dr::clip(turbidity - 2, 0, (NB_TURBIDITY - 1) - 1);
 
         ScalarUInt32 eta_idx_low = dr::floor2int<ScalarUInt32>(eta_idx_f),
                      t_idx_low = dr::floor2int<ScalarUInt32>(t_idx_f);
@@ -506,8 +506,7 @@ private:
         dr::make_opaque(m_gaussians, m_gaussian_distr);
     }
 
-    void update_radiance_params(const Albedo& albedo,
-                                ScalarFloat turbidity, ScalarFloat eta) {
+    void update_sky_radiance(const Albedo& albedo, ScalarFloat turbidity, ScalarFloat eta) {
         std::vector<ScalarFloat>
                 params = compute_radiance_params(m_sky_dataset, albedo, turbidity, eta),
                 radiance = compute_radiance_params(m_sky_rad_dataset, albedo, turbidity, eta);
@@ -551,7 +550,7 @@ private:
                 albedo_buff[i] = temp[i];
 
         } else {
-            Log(Error, "Unsupported spectrum type");
+            Throw("Unsupported spectrum type");
         }
 
         for (size_t i = 0; i < NB_CHANNELS; ++i)

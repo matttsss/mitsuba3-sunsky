@@ -4,9 +4,6 @@
 #include <vector>
 
 #include "sunsky_helpers.h"
-#include "ArHosekSkyModelData_Spectral.h"
-#include "ArHosekSkyModelData_RGB.h"
-#include "ArHosekSkyModelData_CIEXYZ.h"
 
 #include <mitsuba/core/fstream.h>
 #include <mitsuba/core/spectrum.h>
@@ -19,6 +16,137 @@ NAMESPACE_BEGIN(mitsuba)
     // ================================================================================================
     // =========================================== FILE I/O ===========================================
     // ================================================================================================
+
+    template<typename FileType, typename OutType>
+    std::vector<OutType> array_from_file(const std::string &path) {
+        FileStream file(path, FileStream::EMode::ERead);
+
+        // =============== Read headers ===============
+        char text_buff[5] = "";
+        file.read(text_buff, 3);
+        if (strcmp(text_buff, "SKY") != 0 && strcmp(text_buff, "SUN") != 0)
+            Throw("OUPSSS wrong file");
+
+        // Read version
+        uint32_t version;
+        file.read(version);
+
+        // =============== Read tensor dimensions ===============
+        size_t nb_dims = 0;
+        file.read(nb_dims);
+
+        size_t nb_elements = 1;
+        std::vector<size_t> shape(nb_dims);
+        for (size_t dim = 0; dim < nb_dims; ++dim) {
+            file.read(shape[dim]);
+
+            if (!shape[dim])
+                Throw("Got dimension with 0 elements");
+
+            nb_elements *= shape[dim];
+        }
+
+        // ==================== Read data ====================
+        std::vector<FileType> data_f(nb_elements);
+        file.read_array(data_f.data(), nb_elements);
+        file.close();
+
+        return std::vector<OutType>(data_f.begin(), data_f.end());
+    }
+
+    template<typename Float>
+    void array_to_file(const std::string &path, const DynamicBuffer<Float>& data, const std::vector<size_t>& shape = {}) {
+        std::vector<size_t> _shape = shape.empty() ? std::vector<size_t>{data.size()} : shape;
+        if (_shape.empty())
+            _shape.push_back(data.size());
+
+        FileStream file(path, FileStream::EMode::ETruncReadWrite);
+
+        // =============== Write headers ===============
+        // Write headers
+        file.write("SKY", 3);
+        file.write((uint32_t) 0);
+
+        // =============== Write dimensions ===============
+        file.write((size_t) _shape.size());
+
+        for (size_t dim_length : _shape) {
+            file.write(dim_length);
+
+            if (!dim_length)
+                Throw("Got dimension with 0 elements");
+        }
+
+        // ==================== Write data ====================
+        file.write_array(data.data(), data.size());
+
+        file.close();
+    }
+
+
+    template<typename Float>
+    auto tensor_from_file(const std::string &path) {
+        using FloatStorage  = DynamicBuffer<Float>;
+        using DoubleStorage = dr::float64_array_t<FloatStorage>;
+        using TensorXf      = dr::Tensor<FloatStorage>;
+
+        FileStream file(path, FileStream::EMode::ERead);
+
+        // =============== Read headers ===============
+        char text_buff[5] = "";
+        file.read(text_buff, 3);
+        if (strcmp(text_buff, "SKY") != 0 && strcmp(text_buff, "SUN") != 0)
+            Throw("OUPSSS wrong file");
+
+        // Read version
+        uint32_t version;
+        file.read(version);
+
+        // =============== Read tensor dimensions ===============
+        size_t nb_dims = 0;
+        file.read(nb_dims);
+
+        size_t nb_elements = 1;
+        size_t shape[nb_dims];
+        for (size_t dim = 0; dim < nb_dims; ++dim) {
+            file.read(shape[dim]);
+
+            if (!shape[dim])
+                Throw("Got dimension with 0 elements");
+
+            nb_elements *= shape[dim];
+        }
+
+        // ==================== Read data ====================
+        double* buffer = static_cast<double *>(
+            calloc(nb_elements, sizeof(double)));
+
+        file.read_array(buffer, nb_elements);
+
+        DoubleStorage data_d = dr::load<DoubleStorage>(buffer, nb_elements);
+        FloatStorage data_v = FloatStorage(data_d);
+
+        file.close();
+        free(buffer);
+
+        return TensorXf(data_v, nb_dims, shape);
+    }
+
+
+    /*
+     * This section contains the code that was used to generate the dataset files
+     * from the original header files. These functions may not look friendly but
+     * they mainly reorder the data by swapping axis. They should only be used if
+     * the generated dataset files are lost.
+     * The exception being the Solar RGB dataset that need to be computed via the
+     * Solar spectral dataset and the limb darkening dataset.
+     */
+
+    // Header with datasets downloadable from here:
+    // https://cgg.mff.cuni.cz/projects/SkylightModelling/
+    #include "ArHosekSkyModelData_Spectral.h"
+    #include "ArHosekSkyModelData_RGB.h"
+    #include "ArHosekSkyModelData_CIEXYZ.h"
 
     #define F_DIM 5
     #define L_DIM 4
@@ -113,7 +241,7 @@ NAMESPACE_BEGIN(mitsuba)
     }
 
 
-void write_sun_data_rgb(const std::string& path) {
+    void write_sun_data_rgb(const std::string& path) {
         const auto [nb_dims_solar, dim_size_solar, p_dataset_solar] = solar_dataset;
         const auto [nb_dims_ld, dim_size_ld, p_dataset_ld] = limb_darkening_dataset;
         FileStream file(path, FileStream::EMode::ETruncReadWrite);
@@ -133,8 +261,6 @@ void write_sun_data_rgb(const std::string& path) {
         file.write((size_t) NB_SUN_LD_PARAMS);
 
         double* buffer = (double*)calloc(NB_TURBIDITY * NB_SUN_SEGMENTS * 3 * NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS, sizeof(double));
-
-
 
         for (size_t turb = 0; turb < NB_TURBIDITY; ++turb) {
 
@@ -156,7 +282,7 @@ void write_sun_data_rgb(const std::string& path) {
                                                    ctrl_pt * NB_SUN_LD_PARAMS +
                                                    ld_param_idx;
 
-
+                            // Convert from spectral to RGB
                             for (size_t lambda = 0; lambda < NB_WAVELENGTHS; ++lambda) {
                                 const double rectifier = (double) linear_rgb_rec(WAVELENGTHS[lambda])[rgb_idx];
 
@@ -276,6 +402,13 @@ void write_sun_data_rgb(const std::string& path) {
         file.close();
     }
 
+    /**
+     * Generates the datasets files from the original, this function should not
+     * be called for each render job, only when the dataset files are lost.
+     *
+     * @param path where the dataset files will be written
+     *             The path should include the prefix of the filename
+     */
     void write_sun_sky_model_data(const std::string &path) {
         write_sky_data(path + "_spec.bin", f_spectral);
         write_sky_data(path + "_spec_rad.bin", l_spectral);
@@ -288,119 +421,36 @@ void write_sun_data_rgb(const std::string& path) {
         write_limb_darkening_data(path + "_ld_sun.bin");
     }
 
-    template<typename FileType, typename OutType>
-    std::vector<OutType> array_from_file(const std::string &path) {
-        FileStream file(path, FileStream::EMode::ERead);
 
-        // =============== Read headers ===============
-        char text_buff[5] = "";
-        file.read(text_buff, 3);
-        if (strcmp(text_buff, "SKY") != 0 && strcmp(text_buff, "SUN") != 0)
-            Throw("OUPSSS wrong file");
+    // Here is the python script used to generate the truncated gaussian dataset file
+    /*
+    import sys; sys.path.insert(0, "build/python")
 
-        // Read version
-        uint32_t version;
-        file.read(version);
+    import numpy as np
+    import pandas as pd
 
-        // =============== Read tensor dimensions ===============
-        size_t nb_dims = 0;
-        file.read(nb_dims);
+    import mitsuba as mi
 
-        size_t nb_elements = 1;
-        std::vector<size_t> shape(nb_dims);
-        for (size_t dim = 0; dim < nb_dims; ++dim) {
-            file.read(shape[dim]);
+    mi.set_variant("llvm_rgb")
 
-            if (!shape[dim])
-                Throw("Got dimension with 0 elements");
+    filename = "<path to>/model_hosek.csv"
+    destination_folder = ...
 
-            nb_elements *= shape[dim];
-        }
+    df = pd.read_csv(filename)
+    df.pop('RMSE')
+    df.pop('MAE')
+    df.pop('Volume')
+    df.pop('Normalization')
+    df.pop('Azimuth')
 
-        // ==================== Read data ====================
-        std::vector<FileType> data_f(nb_elements);
-        file.read_array(data_f.data(), nb_elements);
-        file.close();
+    arr = df.to_numpy()
 
-        return std::vector<OutType>(data_f.begin(), data_f.end());
-    }
+    sort_args = np.lexsort([arr[::, 1], arr[::, 0]])
+    simplified_arr = arr[sort_args, 2:]
+    simplified_arr[::, 1] = np.pi/2 - simplified_arr[::, 1]
 
-    template<typename Float>
-    void array_to_file(const std::string &path, const DynamicBuffer<Float>& data, const std::vector<size_t>& shape = {}) {
-        std::vector<size_t> _shape = shape.empty() ? std::vector<size_t>{data.size()} : shape;
-        if (_shape.empty())
-            _shape.push_back(data.size());
-
-        FileStream file(path, FileStream::EMode::ETruncReadWrite);
-
-        // =============== Write headers ===============
-        // Write headers
-        file.write("SKY", 3);
-        file.write((uint32_t) 0);
-
-        // =============== Write dimensions ===============
-        file.write((size_t) _shape.size());
-
-        for (size_t dim_length : _shape) {
-            file.write(dim_length);
-
-            if (!dim_length)
-                Throw("Got dimension with 0 elements");
-        }
-
-        // ==================== Write data ====================
-        file.write_array(data.data(), data.size());
-
-        file.close();
-    }
-
-
-    template<typename Float>
-    auto tensor_from_file(const std::string &path) {
-        using FloatStorage  = DynamicBuffer<Float>;
-        using DoubleStorage = dr::float64_array_t<FloatStorage>;
-        using TensorXf      = dr::Tensor<FloatStorage>;
-
-        FileStream file(path, FileStream::EMode::ERead);
-
-        // =============== Read headers ===============
-        char text_buff[5] = "";
-        file.read(text_buff, 3);
-        if (strcmp(text_buff, "SKY") != 0 && strcmp(text_buff, "SUN") != 0)
-            Throw("OUPSSS wrong file");
-
-        // Read version
-        uint32_t version;
-        file.read(version);
-
-        // =============== Read tensor dimensions ===============
-        size_t nb_dims = 0;
-        file.read(nb_dims);
-
-        size_t nb_elements = 1;
-        size_t shape[nb_dims];
-        for (size_t dim = 0; dim < nb_dims; ++dim) {
-            file.read(shape[dim]);
-
-            if (!shape[dim])
-                Throw("Got dimension with 0 elements");
-
-            nb_elements *= shape[dim];
-        }
-
-        // ==================== Read data ====================
-        double* buffer = static_cast<double *>(
-            calloc(nb_elements, sizeof(double)));
-
-        file.read_array(buffer, nb_elements);
-
-        DoubleStorage data_d = dr::load<DoubleStorage>(buffer, nb_elements);
-        FloatStorage data_v = FloatStorage(data_d);
-
-        file.close();
-        free(buffer);
-
-        return TensorXf(data_v, nb_dims, shape);
-    }
+    shape = (9, 30, 5, 5)
+    mi.array_to_file(f"{destination_folder}/tgmm_tables.bin", mi.Float(np.ravel(simplified_arr)), shape)
+    */
 
 NAMESPACE_END(mitsuba)

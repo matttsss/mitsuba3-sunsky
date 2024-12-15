@@ -7,22 +7,21 @@ import mitsuba as mi
 
 mi.set_variant("llvm_rgb")
 
-def parse_csv_dataset(filename: str):
-    df = pd.read_csv(filename)
-    df.pop('RMSE')
-    df.pop('MAE')
-    df.pop('Volume')
-    df.pop('Normalization')
-    df.pop('Azimuth')
+filename = "sunsky-testing/res/datasets/model_hosek.csv"
+destination_folder = "sunsky-testing/res/datasets/"
 
-    arr = df.to_numpy()
+df = pd.read_csv(filename)
+df.pop('RMSE')
+df.pop('MAE')
+df.pop('Volume')
+df.pop('Normalization')
+df.pop('Azimuth')
 
-    sort_args = np.lexsort([arr[::, 1], arr[::, 0]])
-    simplified_arr = arr[sort_args, 2:]
-    simplified_arr[::, 1] = np.pi/2 - simplified_arr[::, 1]
+arr = df.to_numpy()
 
-    shape = (9, 30, 5, 5)
-    mi.array_to_file("sunsky-testing/res/datasets/tgmm_tables.bin", mi.Float(np.ravel(simplified_arr)), shape)
+sort_args = np.lexsort([arr[::, 1], arr[::, 0]])
+simplified_arr = arr[sort_args, 2:]
+simplified_arr[::, 1] = np.pi/2 - simplified_arr[::, 1]
 
-parse_csv_dataset("sunsky-testing/res/datasets/model_hosek.csv")
-
+shape = (9, 30, 5, 5)
+mi.array_to_file(f"{destination_folder}/tgmm_tables.bin", mi.Float(np.ravel(simplified_arr)), shape)
