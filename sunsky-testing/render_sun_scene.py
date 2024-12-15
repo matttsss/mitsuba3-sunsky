@@ -50,8 +50,9 @@ def render_and_write_scene(scene_name):
     mi.util.write_bitmap(f"sunsky-testing/res/renders/{scene_name}.exr", image)
 
 if __name__ == "__main__":
-    mi.set_variant("cuda_spectral")
+    mi.set_variant("cuda_rgb")
     dr.set_log_level(dr.LogLevel.Warn)
+    mi.write_sun_sky_model_data("sunsky-testing/res/datasets/ssm_dataset")
 
     if mi.variant() == "cuda_rgb":
         render_and_write_scene("test_sun_rgb")
