@@ -64,9 +64,6 @@ public:
 
     using Gaussian = dr::Array<Float, NB_GAUSSIAN_PARAMS>;
     using Albedo = std::array<ScalarFloat, is_spectral_v<Spectrum> ? NB_WAVELENGTHS : 3>;
-    using SolarRadiance = std::conditional_t<is_spectral_v<Spectrum>,
-                                                ContinuousDistribution<Wavelength>,
-                                                Color3f>;
 
     using SpecUInt32 = dr::uint32_array_t<Spectrum>;
     using SpecMask = dr::mask_t<Spectrum>;
@@ -171,7 +168,7 @@ public:
         UnpolarizedSpectrum res = 0.f;
         if constexpr (is_rgb_v<Spectrum>) {
             // dr::width(idx) == 1
-            SpecUInt32 idx = SpecUInt32({0, 1, 2});
+            const SpecUInt32 idx = SpecUInt32({0, 1, 2});
 
             res = m_sky_scale * render_sky(idx, cos_theta, cos_gamma, active);
             res += m_sun_scale * render_sun(idx, cos_theta, cos_gamma, active);
@@ -179,20 +176,23 @@ public:
             res *= MI_CIE_Y_NORMALIZATION;
 
         } else {
-            Spectrum normalized_wavelengths = (si.wavelengths - WAVELENGTHS[0]) / WAVELENGTH_STEP;
-            SpecUInt32 query_idx = SpecUInt32(dr::floor(normalized_wavelengths));
-            Spectrum lerp_factor = normalized_wavelengths - query_idx;
+            const Spectrum normalized_wavelengths = (si.wavelengths - WAVELENGTHS[0]) / WAVELENGTH_STEP;
 
-            SpecMask spec_mask = active & (query_idx >= 0) & (query_idx < NB_CHANNELS);
+            const SpecUInt32 query_idx_low = dr::floor2int<SpecUInt32>(normalized_wavelengths),
+                             query_idx_high = dr::minimum(query_idx_low + 1, NB_CHANNELS - 1);
+
+            const Spectrum lerp_factor = normalized_wavelengths - query_idx_low;
+
+            SpecMask spec_mask = active & (query_idx_low >= 0) & (query_idx_low < NB_CHANNELS);
 
             res = m_sky_scale * dr::lerp(
-                render_sky(query_idx, cos_theta, cos_gamma, spec_mask),
-                render_sky(dr::minimum(query_idx + 1, NB_CHANNELS - 1), cos_theta, cos_gamma, spec_mask),
+                render_sky(query_idx_low, cos_theta, cos_gamma, spec_mask),
+                render_sky(query_idx_high, cos_theta, cos_gamma, spec_mask),
                 lerp_factor); // FIXME: explain this factor * 465.382521163
 
             res += m_sun_scale * dr::lerp(
-                render_sun(query_idx, cos_theta, cos_gamma, spec_mask),
-                render_sun(dr::minimum(query_idx + 1, NB_CHANNELS - 1), cos_theta, cos_gamma, spec_mask),
+                render_sun(query_idx_low, cos_theta, cos_gamma, spec_mask),
+                render_sun(query_idx_high, cos_theta, cos_gamma, spec_mask),
                 lerp_factor);
 
             res *= m_d65->eval(si, active);
@@ -335,7 +335,7 @@ private:
         for (uint8_t i = 0; i < NB_SKY_PARAMS; ++i)
             coefs[i] = dr::gather<Spectrum>(m_sky_params, channel_idx * NB_SKY_PARAMS + i, active);
 
-        Float gamma = dr::acos(cos_gamma),
+        Float gamma = dr::safe_acos(cos_gamma),
               cos_gamma_sqr = dr::square(cos_gamma);
 
         Spectrum c1 = 1 + coefs[0] * dr::exp(coefs[1] / (cos_theta + 0.01f));
