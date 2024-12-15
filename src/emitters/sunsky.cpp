@@ -357,14 +357,23 @@ private:
             solar_radiance = sun_ld * sun_radiance;
 
         } else {
+            // Reproduces the spectral equation above but distributes the product of sums
+            // since it uses interpolated coefficients from the spectral dataset
+
             SpecUInt32 global_idx = pos * (3 * NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS) +
                                     channel_idx * (NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS);
 
-            for (uint8_t k = 0; k < NB_SUN_CTRL_PTS; ++k)
-                for (uint8_t j = 0; j < NB_SUN_LD_PARAMS; ++j)
-                    solar_radiance += dr::pow(x, k) * dr::pow(cos_phi, j) *
-                        dr::gather<Spectrum>(m_sun_radiance, global_idx + k * NB_SUN_LD_PARAMS + j, hit_sun);
+            Float x_exp = 1.f;
+            for (uint8_t k = 0; k < NB_SUN_CTRL_PTS; ++k) {
 
+                Float cos_exp = 1.f;
+                for (uint8_t j = 0; j < NB_SUN_LD_PARAMS; ++j) {
+                    solar_radiance += x_exp * cos_exp * dr::gather<Spectrum>(m_sun_radiance, global_idx + k * NB_SUN_LD_PARAMS + j, hit_sun);
+                    cos_exp *= cos_phi;
+                }
+
+                x_exp *= x;
+            }
         }
 
 
@@ -444,22 +453,6 @@ private:
         return dr::select(active, pdf, 0.0);
     }
 
-    void update_sun_radiance(ScalarFloat turbidity) {
-        std::vector<ScalarFloat> sun_radiance = compute_sun_params(m_sun_rad_dataset, turbidity);
-
-        m_sun_radiance = dr::load<FloatStorage>(sun_radiance.data(), sun_radiance.size());
-
-        dr::make_opaque(m_sun_radiance);
-    }
-
-    void update_tgmm_distribution(ScalarFloat turbidity, ScalarFloat eta) {
-        const auto [distrib_params, mis_weights] = compute_tgmm_distribution(m_tgmm_tables, turbidity, eta);
-
-        m_gaussians = dr::load<FloatStorage>(distrib_params.data(), distrib_params.size());
-        m_gaussian_distr = DiscreteDistribution<Float>(mis_weights.data(), mis_weights.size());
-
-        dr::make_opaque(m_gaussians, m_gaussian_distr);
-    }
 
     void update_sky_radiance(const Albedo& albedo, ScalarFloat turbidity, ScalarFloat eta) {
         std::vector<ScalarFloat>
@@ -471,6 +464,26 @@ private:
 
         dr::make_opaque(m_sky_params, m_sky_radiance);
     }
+
+
+    void update_sun_radiance(ScalarFloat turbidity) {
+        std::vector<ScalarFloat> sun_radiance = compute_sun_params(m_sun_rad_dataset, turbidity);
+
+        m_sun_radiance = dr::load<FloatStorage>(sun_radiance.data(), sun_radiance.size());
+
+        dr::make_opaque(m_sun_radiance);
+    }
+
+
+    void update_tgmm_distribution(ScalarFloat turbidity, ScalarFloat eta) {
+        const auto [distrib_params, mis_weights] = compute_tgmm_distribution(m_tgmm_tables, turbidity, eta);
+
+        m_gaussians = dr::load<FloatStorage>(distrib_params.data(), distrib_params.size());
+        m_gaussian_distr = DiscreteDistribution<Float>(mis_weights.data(), mis_weights.size());
+
+        dr::make_opaque(m_gaussians, m_gaussian_distr);
+    }
+
 
     Albedo extract_albedo(const ref<Texture>& albedo) const {
         Albedo albedo_buff = {};

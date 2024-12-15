@@ -4,6 +4,8 @@
 #include <vector>
 
 #include <mitsuba/core/fstream.h>
+
+// Used for creating the RGB solar dataset
 #include <mitsuba/core/spectrum.h>
 
 #include <drjit/dynamic.h>
@@ -492,7 +494,7 @@ NAMESPACE_BEGIN(mitsuba)
 
     /*
      * This section contains the code that was used to generate the dataset files
-     * from the original header files. These functions may not look friendly but
+     * from the original header files. These functions may not look friendly, but
      * they mainly reorder the data by swapping axis. They should only be used if
      * the generated dataset files are lost.
      * The exception being the Solar RGB dataset that need to be computed via the

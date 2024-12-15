@@ -558,7 +558,8 @@ def EmitterAdapter(emitter_type, extra):
         plugin = instantiate(args)
         si = dr.zeros(mi.Interaction3f)
         ds, w = plugin.sample_direction(si, sample)
-        return ds.d
+        weights = dr.ones(mi.Float, n) & (ds.pdf != 0.0)
+        return ds.d, weights
 
     def pdf_functor(wo, *args):
         n = dr.width(wo)
