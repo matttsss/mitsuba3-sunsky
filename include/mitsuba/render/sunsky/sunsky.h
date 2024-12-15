@@ -48,8 +48,8 @@ NAMESPACE_BEGIN(mitsuba)
     /// Number of parameters for each gaussian component
     #define NB_GAUSSIAN_PARAMS 5
 
-    /// Sun apperture angle
-    #define SUN_APPERTURE 0.5358
+    /// Sun aperture angle in radians
+    #define SUN_APERTURE 0.5358
     /// Mean radius of the Earth
     #define EARTH_MEAN_RADIUS 6371.01   // In km
     /// Astronomical unit
@@ -619,6 +619,7 @@ NAMESPACE_BEGIN(mitsuba)
         file.write((size_t) NB_SUN_CTRL_PTS);
         file.write((size_t) NB_SUN_LD_PARAMS);
 
+        size_t dst_idx = 0;
         double* buffer = (double*)calloc(NB_TURBIDITY * NB_SUN_SEGMENTS * 3 * NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS, sizeof(double));
 
         for (size_t turb = 0; turb < NB_TURBIDITY; ++turb) {
@@ -629,27 +630,21 @@ NAMESPACE_BEGIN(mitsuba)
 
                     for (size_t ctrl_pt = 0; ctrl_pt < NB_SUN_CTRL_PTS; ++ctrl_pt) {
                         // Weird indices since their dataset goes backwards on the last index
-                        const size_t sun_rad_idx = turb * (NB_SUN_SEGMENTS * NB_SUN_CTRL_PTS) +
+                        const size_t sun_idx = turb * (NB_SUN_SEGMENTS * NB_SUN_CTRL_PTS) +
                                                       (segment + 1) * NB_SUN_CTRL_PTS - (ctrl_pt + 1);
 
                         for (size_t ld_param_idx = 0; ld_param_idx < NB_SUN_LD_PARAMS; ++ld_param_idx) {
-
-
-                            const size_t dst_idx = turb * (NB_SUN_SEGMENTS * 3 * NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS) +
-                                                   segment * (3 * NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS) +
-                                                   rgb_idx * (NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS) +
-                                                   ctrl_pt * NB_SUN_LD_PARAMS +
-                                                   ld_param_idx;
 
                             // Convert from spectral to RGB
                             for (size_t lambda = 0; lambda < NB_WAVELENGTHS; ++lambda) {
                                 const double rectifier = (double) linear_rgb_rec(WAVELENGTHS[lambda])[rgb_idx];
 
-                                buffer[dst_idx] += rectifier * p_dataset_solar[lambda][sun_rad_idx] *
+                                buffer[dst_idx] += rectifier * p_dataset_solar[lambda][sun_idx] *
                                                         p_dataset_ld[lambda][ld_param_idx];
                             }
 
                             buffer[dst_idx] /= NB_WAVELENGTHS;
+                            ++dst_idx;
                         }
                     }
                 }
@@ -674,8 +669,8 @@ NAMESPACE_BEGIN(mitsuba)
 
         // Write reordered shapes
         file.write(dim_size[(uint32_t)SunDataShapeIdx::TURBIDITY]);
-        file.write(dim_size[(uint32_t)SunDataShapeIdx::WAVELENGTH]);
         file.write(dim_size[(uint32_t)SunDataShapeIdx::SUN_SEGMENTS]);
+        file.write(dim_size[(uint32_t)SunDataShapeIdx::WAVELENGTH]);
         file.write(dim_size[(uint32_t)SunDataShapeIdx::SUN_CTRL_PTS]);
 
         for (size_t turb = 0; turb < NB_TURBIDITY; ++turb) {
@@ -725,6 +720,7 @@ NAMESPACE_BEGIN(mitsuba)
         const size_t nb_params = nb_dims == F_DIM ? NB_SKY_PARAMS : 1,
                      nb_colors = dim_size[(uint32_t)SkyDataShapeIdx::WAVELENGTH];
 
+        size_t dst_idx = 0;
         double* buffer = (double*)calloc(tensor_size, sizeof(double));
 
         // Converts from (11 x 2 x 10 x 6 x ...) to (10 x 2 x 6 x 11 x ...)
@@ -737,17 +733,13 @@ NAMESPACE_BEGIN(mitsuba)
                     for (size_t color_idx = 0; color_idx < nb_colors; ++color_idx) {
 
                         for (size_t param_idx = 0; param_idx < nb_params; ++param_idx) {
-                            size_t dest_global_offset = t * (NB_ALBEDO * NB_SKY_CTRL_PTS * nb_colors * nb_params) +
-                                                        a * (NB_SKY_CTRL_PTS * nb_colors * nb_params) +
-                                                        ctrl_idx * nb_colors * nb_params +
-                                                        color_idx * nb_params +
-                                                        param_idx;
+
                             size_t src_global_offset = a * (NB_TURBIDITY * NB_SKY_CTRL_PTS * nb_params) +
                                                        t * (NB_SKY_CTRL_PTS * nb_params) +
                                                        ctrl_idx * nb_params +
                                                        param_idx;
-                            buffer[dest_global_offset] = p_dataset[color_idx][src_global_offset];
-
+                            buffer[dst_idx] = p_dataset[color_idx][src_global_offset];
+                            ++dst_idx;
                         }
                     }
                 }

@@ -421,7 +421,7 @@ class SphericalDomain:
     # return mi.ScalarBoundingBox2f([-dr.pi, -1], [dr.pi, 1])
 
     def bounds(self):
-        return mi.ScalarBoundingBox2f([-dr.pi, -1 + dr.asin(dr.epsilon(mi.Float))], [dr.pi, 1])
+        return mi.ScalarBoundingBox2f([-dr.pi, -1], [dr.pi, 1])
 
     def aspect(self):
         return 2

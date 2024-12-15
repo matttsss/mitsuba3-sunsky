@@ -244,12 +244,12 @@ public:
         Vector3f local_dir = dr::normalize(m_to_world.value().inverse().transform_affine(ds.d));
         active &= (Frame3f::cos_theta(local_dir) >= 0.f) && (Frame3f::sin_theta(local_dir) != 0.f);
 
-        Float sun_pdf = warp::square_to_uniform_cone_pdf(m_local_sun_frame.to_local(local_dir), m_sun_cos_cutoff);
-        Float sky_pdf = tgmm_pdf(local_dir, active);
+        Float sun_pdf = warp::square_to_uniform_cone_pdf<true>(m_local_sun_frame.to_local(local_dir), m_sun_cos_cutoff);
+        Float sky_pdf = tgmm_pdf(from_spherical(local_dir), active) / Frame3f::sin_theta(local_dir);
 
         Float combined_pdf = (m_sky_scale * sky_pdf + m_sun_scale * sun_pdf) / (m_sky_scale + m_sun_scale);
 
-        return dr::select(active, combined_pdf / Frame3f::sin_theta(local_dir), 0.f);
+        return dr::select(active, combined_pdf, 0.f);
     }
 
     /// This emitter does not occupy any particular region of space, return an invalid bounding box
@@ -278,7 +278,7 @@ private:
 
     static constexpr size_t NB_CHANNELS = is_spectral_v<Spectrum> ? NB_WAVELENGTHS : 3;
 
-    const Float m_sun_cos_cutoff = (Float) dr::cos(dr::deg_to_rad((ScalarFloat) (SUN_APPERTURE * 0.5)));
+    const Float m_sun_cos_cutoff = (Float) dr::cos(dr::deg_to_rad((ScalarFloat) (SUN_APERTURE * 0.5)));
 
     Float m_surface_area;
     BoundingSphere3f m_bsphere;
@@ -405,8 +405,8 @@ private:
         // From fixed reference frame where sun_phi = pi/2 to local frame
         angles.x() += m_sun_phi - 0.5f * dr::Pi<Float>;
 
+        Float pdf = tgmm_pdf(angles, active);
         Vector3f sky_sample = dr::normalize(to_spherical(angles));
-        Float pdf = tgmm_pdf(sky_sample, active);
 
         return { sky_sample, pdf };
     }
@@ -418,10 +418,7 @@ private:
         return { m_local_sun_frame.to_world(sun_sample), pdf };
     }
 
-    Float tgmm_pdf(const Vector3f& direction, Mask active) const {
-
-        Point2f angles = from_spherical(direction);
-
+    Float tgmm_pdf(Point2f angles, Mask active) const {
         // From local frame to reference frame where sun_phi = pi/2
         angles.x() -= m_sun_phi - 0.5f * dr::Pi<Float>;
         angles.x() = dr::select(angles.x() < 0, angles.x() + dr::TwoPi<Float>, angles.x());
