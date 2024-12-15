@@ -1,5 +1,5 @@
 #include <nanobind/nanobind.h>
-#include <mitsuba/render/sunsky/sunsky_io.h>
+#include <mitsuba/render/sunsky/sunsky.h>
 
 #include <mitsuba/python/python.h>
 

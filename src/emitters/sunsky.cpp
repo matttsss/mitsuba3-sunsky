@@ -4,9 +4,7 @@
 #include <mitsuba/render/emitter.h>
 #include <mitsuba/render/scene.h>
 
-#include <mitsuba/render/sunsky/sun_model.h>
-#include <mitsuba/render/sunsky/sky_model.h>
-#include <mitsuba/render/sunsky/sunsky_io.h>
+#include <mitsuba/render/sunsky/sunsky.h>
 
 NAMESPACE_BEGIN(mitsuba)
 
@@ -47,9 +45,6 @@ geometry that uses basic (e.g. diffuse) materials.
 
  */
 
-#define NB_ETAS 30
-#define NB_GAUSSIAN 5
-#define NB_GAUSSIAN_PARAMS 5
 
 #define DATABASE_PREFIX "ssm_dataset"
 #define DATABASE_PATH "sunsky-testing/res/datasets/"
@@ -283,7 +278,7 @@ private:
 
     static constexpr size_t NB_CHANNELS = is_spectral_v<Spectrum> ? NB_WAVELENGTHS : 3;
 
-    const Float m_sun_cos_cutoff = (Float) dr::cos(dr::deg_to_rad((ScalarFloat) (SUN_APP_RADIUS * 0.5)));
+    const Float m_sun_cos_cutoff = (Float) dr::cos(dr::deg_to_rad((ScalarFloat) (SUN_APPERTURE * 0.5)));
 
     Float m_surface_area;
     BoundingSphere3f m_bsphere;
@@ -458,47 +453,7 @@ private:
     }
 
     void update_tgmm_distribution(ScalarFloat turbidity, ScalarFloat eta) {
-
-        eta = dr::rad_to_deg(eta);
-        ScalarFloat eta_idx_f = dr::clip((eta - 2) / 3, 0, NB_ETAS - 1),
-                    t_idx_f = dr::clip(turbidity - 2, 0, (NB_TURBIDITY - 1) - 1);
-
-        ScalarUInt32 eta_idx_low = dr::floor2int<ScalarUInt32>(eta_idx_f),
-                     t_idx_low = dr::floor2int<ScalarUInt32>(t_idx_f);
-
-        ScalarUInt32 eta_idx_high = dr::minimum(eta_idx_low + 1, NB_ETAS - 1),
-                     t_idx_high = dr::minimum(t_idx_low + 1, (NB_TURBIDITY - 1) - 1);
-
-        ScalarFloat eta_rem = eta_idx_f - eta_idx_low,
-                    t_rem = t_idx_f - t_idx_low;
-
-        const size_t t_block_size = m_tgmm_tables.size() / (NB_TURBIDITY - 1),
-                     eta_block_size = t_block_size / NB_ETAS;
-
-        const ScalarUInt64 indices[4] = {
-            t_idx_low * t_block_size + eta_idx_low * eta_block_size,
-            t_idx_low * t_block_size + eta_idx_high * eta_block_size,
-            t_idx_high * t_block_size + eta_idx_low * eta_block_size,
-            t_idx_high * t_block_size + eta_idx_high * eta_block_size
-        };
-        const ScalarFloat lerp_factors[4] = {
-            (1 - t_rem) * (1 - eta_rem),
-            (1 - t_rem) * eta_rem,
-            t_rem * (1 - eta_rem),
-            t_rem * eta_rem
-        };
-        std::vector<ScalarFloat> distrib_params(4 * eta_block_size);
-        for (size_t mixture_idx = 0; mixture_idx < 4; ++mixture_idx) {
-            for (size_t param_idx = 0; param_idx < eta_block_size; ++param_idx) {
-                ScalarUInt32 index = mixture_idx * eta_block_size + param_idx;
-                distrib_params[index] = m_tgmm_tables[indices[mixture_idx] + param_idx];
-                distrib_params[index] *= index % NB_GAUSSIAN_PARAMS == 4 ? lerp_factors[mixture_idx] : 1;
-            }
-        }
-
-        std::vector<ScalarFloat> mis_weights(4 * NB_GAUSSIAN);
-        for (size_t gaussian_idx = 0; gaussian_idx < 4 * NB_GAUSSIAN; ++gaussian_idx)
-            mis_weights[gaussian_idx] = distrib_params[gaussian_idx * NB_GAUSSIAN_PARAMS + 4];
+        const auto [distrib_params, mis_weights] = compute_tgmm_distribution(m_tgmm_tables, turbidity, eta);
 
         m_gaussians = dr::load<FloatStorage>(distrib_params.data(), distrib_params.size());
         m_gaussian_distr = DiscreteDistribution<Float>(mis_weights.data(), mis_weights.size());
