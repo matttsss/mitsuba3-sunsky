@@ -213,6 +213,7 @@ public:
 
         Float sin_theta = Frame3f::sin_theta(sample_dir);
         active &= (Frame3f::cos_theta(sample_dir) >= 0.f) && (sin_theta != 0.f);
+        sin_theta = dr::maximum(sin_theta, SIN_OFFSET);
         pdf = dr::select(active, pdf / sin_theta, 0.f);
 
         // Automatically enlarge the bounding sphere when it does not contain the reference point
@@ -242,10 +243,13 @@ public:
         MI_MASKED_FUNCTION(ProfilerPhase::EndpointEvaluate, active);
 
         Vector3f local_dir = dr::normalize(m_to_world.value().inverse().transform_affine(ds.d));
-        active &= (Frame3f::cos_theta(local_dir) >= 0.f) && (Frame3f::sin_theta(local_dir) != 0.f);
+
+        Float sin_theta = Frame3f::sin_theta(local_dir);
+        active &= (Frame3f::cos_theta(local_dir) >= 0.f) && (sin_theta != 0.f);
+        sin_theta = dr::maximum(sin_theta, SIN_OFFSET);
 
         Float sun_pdf = warp::square_to_uniform_cone_pdf<true>(m_local_sun_frame.to_local(local_dir), m_sun_cos_cutoff);
-        Float sky_pdf = tgmm_pdf(from_spherical(local_dir), active) / Frame3f::sin_theta(local_dir);
+        Float sky_pdf = tgmm_pdf(from_spherical(local_dir), active) / sin_theta;
 
         Float combined_pdf = (m_sky_scale * sky_pdf + m_sun_scale * sun_pdf) / (m_sky_scale + m_sun_scale);
 
@@ -276,6 +280,7 @@ private:
         DATABASE_PREFIX "_spec" :
         DATABASE_PREFIX "_rgb";
 
+    static constexpr ScalarFloat SIN_OFFSET = 0.00775;
     static constexpr size_t NB_CHANNELS = is_spectral_v<Spectrum> ? NB_WAVELENGTHS : 3;
 
     const Float m_sun_cos_cutoff = (Float) dr::cos(dr::deg_to_rad((ScalarFloat) (SUN_APERTURE * 0.5)));
