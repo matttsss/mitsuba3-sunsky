@@ -20,6 +20,7 @@ def render_and_compare(ref_path, params: tuple[float]):
     sky = mi.load_dict({
         "type": "sunsky",
         "sunDirection": [cp_sun * st, sp_sun * st, ct],
+        "sunScale": 0.0,
         "turbidity": params[1],
         "albedo": params[2]
     })

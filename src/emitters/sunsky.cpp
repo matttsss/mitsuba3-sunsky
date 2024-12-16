@@ -64,45 +64,44 @@ public:
     using SpecMask = dr::mask_t<Spectrum>;
 
     SunskyEmitter(const Properties &props) : Base(props) {
-        /* Until `set_scene` is called, we have no information
-           about the scene and default to the unit bounding sphere. */
-        m_bsphere = BoundingSphere3f(ScalarPoint3f(0.f), 1.f);
-        m_surface_area = 4.f * dr::Pi<Float>;
-
-        m_d65 = Texture::D65(1.f);
-
         m_sun_scale = props.get<ScalarFloat>("sunScale", 1.f);
         m_sky_scale = props.get<ScalarFloat>("skyScale", 1.f);
 
-        // ================ GET TURBIDITY ===============
-        ScalarFloat turbidity = props.get<ScalarFloat>("turbidity", 3.f);
+        m_turbidity = props.get<ScalarFloat>("turbidity", 3.f);
 
-        // ================= GET ALBEDO =================
-        ref<Texture> albedo = props.texture<Texture>("albedo", 1.f);
-        if (albedo->is_spatially_varying())
+        m_albedo = props.texture<Texture>("albedo", 1.f);
+        if (m_albedo->is_spatially_varying())
             Throw("Expected a non-spatially varying radiance spectra!");
 
-        dr::eval(albedo);
-        Albedo albedo_buff = extract_albedo(albedo);
+        dr::make_opaque(m_turbidity, m_albedo);
+
+        // ================= GET ALBEDO =================
+        dr::eval(m_albedo);
+        Albedo albedo = extract_albedo(m_albedo);
 
         // ================= GET ANGLES =================
-        ScalarVector3f local_sun_dir = dr::normalize(
+        Vector3f local_sun_dir = dr::normalize(
             m_to_world.scalar().inverse()
             .transform_affine(props.get<ScalarVector3f>("sunDirection")));
 
+        Float sun_theta = dr::unit_angle_z(local_sun_dir),
+              sun_eta = 0.5f * dr::Pi<Float> - sun_theta;
+
+        m_sun_phi = dr::atan2(local_sun_dir.y(), local_sun_dir.x());
+        m_sun_phi = dr::select(m_sun_phi >= 0, m_sun_phi, m_sun_phi + dr::TwoPi<Float>);
+
         m_local_sun_frame = Frame3f(local_sun_dir);
 
-        ScalarFloat sun_phi = dr::atan2(local_sun_dir.y(), local_sun_dir.x());
-        sun_phi = dr::select(sun_phi >= 0, sun_phi, sun_phi + dr::TwoPi<Float>);
-
-        ScalarFloat sun_theta = dr::unit_angle_z(local_sun_dir),
-                    sun_eta = 0.5f * dr::Pi<ScalarFloat> - sun_theta;
+        dr::make_opaque(m_sun_phi, m_local_sun_frame);
 
         // ================= GET SKY RADIANCE =================
         m_sky_dataset = array_from_file<double, ScalarFloat>(DATABASE_PATH + DATASET_NAME + ".bin");
         m_sky_rad_dataset = array_from_file<double, ScalarFloat>(DATABASE_PATH + DATASET_NAME + "_rad.bin");
 
-        update_sky_radiance(albedo_buff, turbidity, sun_eta);
+        m_sky_params = compute_radiance_params(m_sky_dataset, albedo, m_turbidity, sun_eta),
+        m_sky_radiance = compute_radiance_params(m_sky_rad_dataset, albedo, m_turbidity, sun_eta);
+
+        dr::make_opaque(m_sky_params, m_sky_radiance);
 
         // ================= GET SUN RADIANCE =================
         m_sun_rad_dataset = array_from_file<double, ScalarFloat>(DATABASE_PATH + DATASET_NAME + "_solar.bin");
@@ -112,19 +111,27 @@ public:
             m_sun_ld = dr::load<FloatStorage>(m_sun_ld_dataset.data(), m_sun_ld_dataset.size());
         }
 
-        update_sun_radiance(turbidity);
+        update_sun_radiance(m_turbidity);
+
 
         // ================= GET TGMM TABLES =================
         m_tgmm_tables = array_from_file<float, ScalarFloat>(DATABASE_PATH "tgmm_tables.bin");
 
-        update_tgmm_distribution(turbidity, sun_eta);
+        const auto [distrib_params, mis_weights] = compute_tgmm_distribution(m_tgmm_tables, m_turbidity, sun_eta);
 
+        m_gaussians = distrib_params;
+        m_gaussian_distr = DiscreteDistribution<Float>(mis_weights);
 
-        m_turbidity = turbidity;
-        m_sun_phi = sun_phi;
-        m_local_sun_dir = local_sun_dir;
+        dr::make_opaque(m_gaussians, m_gaussian_distr);
 
-        dr::make_opaque(m_turbidity, m_sun_phi, m_local_sun_dir);
+        // ================= GENERIC PARAMETERS =================
+
+        /* Until `set_scene` is called, we have no information
+        about the scene and default to the unit bounding sphere. */
+        m_bsphere = BoundingSphere3f(ScalarPoint3f(0.f), 1.f);
+        m_surface_area = 4.f * dr::Pi<Float>;
+
+        m_d65 = Texture::D65(1.f);
 
         m_flags = +EmitterFlags::Infinite | +EmitterFlags::SpatiallyVarying;
     }
@@ -134,6 +141,7 @@ public:
         callback->put_parameter("turbidity", m_turbidity, +ParamFlags::Differentiable);
         callback->put_parameter("sky_scale", m_sky_scale, +ParamFlags::NonDifferentiable);
         callback->put_parameter("sun_scale", m_sun_scale, +ParamFlags::NonDifferentiable);
+        callback->put_parameter("albedo", m_albedo, +ParamFlags::NonDifferentiable);
     }
 
     void set_scene(const Scene *scene) override {
@@ -157,8 +165,8 @@ public:
         MI_MASKED_FUNCTION(ProfilerPhase::EndpointEvaluate, active);
 
         Vector3f local_wi = dr::normalize(m_to_world.value().inverse().transform_affine(si.wi));
-        Float cos_theta = Frame3f::cos_theta(-local_wi);
-        Float cos_gamma = dr::dot(m_local_sun_dir, -local_wi);
+        Float cos_theta = Frame3f::cos_theta(-local_wi),
+              cos_gamma = Frame3f::cos_theta(m_local_sun_frame.to_local(-local_wi));
 
         active &= cos_theta >= 0;
 
@@ -268,6 +276,7 @@ public:
             << "  turbidity = " << string::indent(m_turbidity) << std::endl
             << "  sky_scale = " << string::indent(m_sky_scale) << std::endl
             << "  sun_scale = " << string::indent(m_sun_scale) << std::endl
+            << "  albedo = " << string::indent(m_albedo) << std::endl // TODO add `to_string`?
             << "]";
         return oss.str();
     }
@@ -283,7 +292,7 @@ private:
     static constexpr ScalarFloat SIN_OFFSET = 0.00775;
     static constexpr size_t NB_CHANNELS = is_spectral_v<Spectrum> ? NB_WAVELENGTHS : 3;
 
-    const Float m_sun_cos_cutoff = (Float) dr::cos(dr::deg_to_rad((ScalarFloat) (SUN_APERTURE * 0.5)));
+    const Float m_sun_cos_cutoff = (Float) dr::cos(0.5 * SUN_APERTURE * dr::Pi<double> / 180.0);
 
     Float m_surface_area;
     BoundingSphere3f m_bsphere;
@@ -291,12 +300,11 @@ private:
     Float m_turbidity;
     ScalarFloat m_sky_scale;
     ScalarFloat m_sun_scale;
+    ref<Texture> m_albedo;
 
+    // Sun parameters
     Float m_sun_phi;
-    Vector3f m_local_sun_dir;
     Frame3f m_local_sun_frame;
-
-    ref<Texture> m_d65;
 
     // Radiance parameters
     FloatStorage m_sky_params;
@@ -307,6 +315,8 @@ private:
     // Sampling parameters
     FloatStorage m_gaussians;
     DiscreteDistribution<Float> m_gaussian_distr;
+
+    ref<Texture> m_d65;
 
     // Permanent datasets loaded from files/memory
     std::vector<ScalarFloat> m_sky_dataset;
@@ -455,35 +465,18 @@ private:
         return dr::select(active, pdf, 0.0);
     }
 
+    void update_sun_radiance(const Float& turbidity) {
+        m_sun_scale = 0.f;
+        if constexpr (dr::is_array_v<Float>) {
 
-    void update_sky_radiance(const Albedo& albedo, ScalarFloat turbidity, ScalarFloat eta) {
-        std::vector<ScalarFloat>
-                params = compute_radiance_params(m_sky_dataset, albedo, turbidity, eta),
-                radiance = compute_radiance_params(m_sky_rad_dataset, albedo, turbidity, eta);
+            m_sun_radiance = dr::zeros<FloatStorage>(10000000);
 
-        m_sky_params = dr::load<FloatStorage>(params.data(), params.size());
-        m_sky_radiance = dr::load<FloatStorage>(radiance.data(), radiance.size());
-
-        dr::make_opaque(m_sky_params, m_sky_radiance);
-    }
-
-
-    void update_sun_radiance(ScalarFloat turbidity) {
-        std::vector<ScalarFloat> sun_radiance = compute_sun_params(m_sun_rad_dataset, turbidity);
-
-        m_sun_radiance = dr::load<FloatStorage>(sun_radiance.data(), sun_radiance.size());
+        } else {
+            std::vector<ScalarFloat> sun_radiance = compute_sun_params(m_sun_rad_dataset, turbidity);
+            m_sun_radiance = dr::load<FloatStorage>(sun_radiance.data(), sun_radiance.size());
+        }
 
         dr::make_opaque(m_sun_radiance);
-    }
-
-
-    void update_tgmm_distribution(ScalarFloat turbidity, ScalarFloat eta) {
-        const auto [distrib_params, mis_weights] = compute_tgmm_distribution(m_tgmm_tables, turbidity, eta);
-
-        m_gaussians = dr::load<FloatStorage>(distrib_params.data(), distrib_params.size());
-        m_gaussian_distr = DiscreteDistribution<Float>(mis_weights.data(), mis_weights.size());
-
-        dr::make_opaque(m_gaussians, m_gaussian_distr);
     }
 
 
