@@ -23,15 +23,15 @@ def render_scene(t, a, eta, phi_sun):
             },
             'film': {
                 'type': 'hdrfilm',
-                'width': 128,
-                'height': 2048,
+                'width': 1024,
+                'height': 512,
             }
         },
         'emitter': {
             'type': 'sunsky',
             'sunDirection': [cp * st, sp * st, ct],
-            'sunScale': 1.0,
-            'skyScale': 0.0,
+            'sunScale': 0.0,
+            'skyScale': 1.0,
             'turbidity': t,
             'albedo': a,
         }
@@ -56,8 +56,9 @@ if __name__ == "__main__":
     dr.set_log_level(dr.LogLevel.Warn)
     mi.write_sun_sky_model_data("sunsky-testing/res/datasets/ssm_dataset")
 
-
     if mi.variant() == "cuda_rgb":
         render_and_write_scene("test_sun_rgb")
-    else:
+    elif mi.variant() == "cuda_spectral":
         render_and_write_scene("test_sun_spec")
+    else:
+        render_and_write_scene("test_sun_scalar")

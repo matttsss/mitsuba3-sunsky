@@ -60,17 +60,6 @@ NAMESPACE_BEGIN(mitsuba)
     // ====================================== HELPER FUNCTIONS ========================================
     // ================================================================================================
 
-    template<typename ScalarFloat>
-    std::vector<ScalarFloat> lerp_vectors(const std::vector<ScalarFloat>& a, const std::vector<ScalarFloat>& b, const ScalarFloat& t) {
-        assert(a.size() == b.size());
-
-        std::vector<ScalarFloat> res(a.size());
-        for (size_t i = 0; i < a.size(); ++i)
-            res[i] = dr::lerp(a[i], b[i], t);
-
-        return res;
-    }
-
     template<typename Value>
     Vector<Value, 3> to_spherical(const Point<Value, 2>& angles) {
         auto [sp, cp] = dr::sincos(angles.x());
@@ -94,22 +83,22 @@ NAMESPACE_BEGIN(mitsuba)
     // ========================================== SKY MODEL ===========================================
     // ================================================================================================
 
-    template <typename ScalarFloat>
-    std::vector<ScalarFloat> bezier_interpolate(
-        const std::vector<ScalarFloat>& dataset, size_t out_size,
-        const uint32_t& offset, const ScalarFloat& x) {
+    template <typename Float>
+    DynamicBuffer<Float> bezier_interpolate(
+        const DynamicBuffer<Float>& dataset, const uint32_t out_size,
+        const uint32_t offset, const Float x) {
 
-        constexpr ScalarFloat coefs[NB_SKY_CTRL_PTS] =
-            {1, 5, 10, 10, 5, 1};
+        constexpr Float coefs[NB_SKY_CTRL_PTS] = {1, 5, 10, 10, 5, 1};
 
-        std::vector<ScalarFloat> res(out_size, 0.0f);
-        for (size_t ctrl_pt = 0; ctrl_pt < NB_SKY_CTRL_PTS; ++ctrl_pt) {
+        DynamicBuffer<Float> res = dr::zeros<DynamicBuffer<Float>>(out_size);
+        for (uint32_t ctrl_pt = 0; ctrl_pt < NB_SKY_CTRL_PTS; ++ctrl_pt) {
 
             uint32_t index = offset + ctrl_pt * out_size;
-            ScalarFloat coef = coefs[ctrl_pt] * dr::pow(1 - x, 5 - ctrl_pt) * dr::pow(x, ctrl_pt);
+            Float coef = coefs[ctrl_pt] * dr::pow(1 - x, 5 - ctrl_pt) * dr::pow(x, ctrl_pt);
 
-            for (size_t j = 0; j < out_size; ++j)
-                res[j] += coef * dataset[index + j];
+            for (uint32_t j = 0; j < out_size; ++j)
+                //res[j] += coef * dataset[index + j];
+                dr::scatter_add(res, coef * dataset[index + j], j);
         }
 
         return res;
@@ -138,12 +127,13 @@ NAMESPACE_BEGIN(mitsuba)
     }
 
 
-    template <typename Float, typename Albedo>
+    template <uint32_t dataset_size, typename Float, typename Albedo>
     DynamicBuffer<Float> compute_radiance_params(
-        const std::vector<dr::value_t<Float>>& dataset,
+        const DynamicBuffer<Float>& dataset,
         const Albedo& albedo, Float turbidity, Float eta) {
 
         using UInt32 = dr::uint32_array_t<Float>;
+        using ScalarUInt32 = dr::value_t<UInt32>;
         using FloatStorage = DynamicBuffer<Float>;
 
         turbidity = dr::clip(turbidity, 1.f, NB_TURBIDITY);
@@ -157,48 +147,38 @@ NAMESPACE_BEGIN(mitsuba)
 
         Float t_rem = turbidity - t_int;
 
-        const size_t t_block_size = dataset.size() / NB_TURBIDITY,
-                     a_block_size = t_block_size  / NB_ALBEDO,
-                     result_size  = a_block_size / NB_SKY_CTRL_PTS,
-                     nb_params    = result_size / albedo.size(); // Either 1 or 9
-                                 // albedo.size() <==> NB_CHANNELS
+        const uint32_t t_block_size = dataset_size / NB_TURBIDITY,
+                       a_block_size = t_block_size  / NB_ALBEDO,
+                       result_size  = a_block_size / NB_SKY_CTRL_PTS,
+                       nb_params    = result_size / albedo.size(); // Either 1 or 9
+                                                 // albedo.size() <==> NB_CHANNELS
 
-        FloatStorage res;
+        FloatStorage
+            t_low_a_low = bezier_interpolate(dataset, result_size, t_low * t_block_size + 0 * a_block_size, x),
+            t_high_a_low = bezier_interpolate(dataset, result_size, t_high * t_block_size + 0 * a_block_size, x),
+            t_low_a_high = bezier_interpolate(dataset, result_size, t_low * t_block_size + 1 * a_block_size, x),
+            t_high_a_high = bezier_interpolate(dataset, result_size, t_high * t_block_size + 1 * a_block_size, x);
+
+        FloatStorage res; // TODO, is one better than the other?
         if constexpr (dr::is_array_v<Float>) {
-
             FloatStorage albedo_storage = dr::load<FloatStorage>(albedo.data(), albedo.size());
 
-            FloatStorage dataset_v = dr::load<FloatStorage>(dataset.data(), dataset.size());
-            FloatStorage
-                t_low_a_low = bezier_interpolate(dataset_v, result_size, t_low * t_block_size + 0 * a_block_size, x),
-                t_high_a_low = bezier_interpolate(dataset_v, result_size, t_high * t_block_size + 0 * a_block_size, x),
-                t_low_a_high = bezier_interpolate(dataset_v, result_size, t_low * t_block_size + 1 * a_block_size, x),
-                t_high_a_high = bezier_interpolate(dataset_v, result_size, t_high * t_block_size + 1 * a_block_size, x);
-
-            FloatStorage
-                res_a_low = dr::lerp(t_low_a_low, t_high_a_low, t_rem),
-                res_a_high = dr::lerp(t_low_a_high, t_high_a_high, t_rem);
+            FloatStorage res_a_low = dr::lerp(t_low_a_low, t_high_a_low, t_rem),
+                         res_a_high = dr::lerp(t_low_a_high, t_high_a_high, t_rem);
 
             res = dr::lerp(res_a_low, res_a_high, dr::repeat(albedo_storage, nb_params));
 
         } else {
-            using ScalarFloat = dr::value_t<Float>;
 
-            std::vector<ScalarFloat>
-                t_low_a_low = bezier_interpolate(dataset, result_size, t_low * t_block_size + 0 * a_block_size, x),
-                t_high_a_low = bezier_interpolate(dataset, result_size, t_high * t_block_size + 0 * a_block_size, x),
-                t_low_a_high = bezier_interpolate(dataset, result_size, t_low * t_block_size + 1 * a_block_size, x),
-                t_high_a_high = bezier_interpolate(dataset, result_size, t_high * t_block_size + 1 * a_block_size, x);
+            res = dr::zeros<FloatStorage>(result_size);
+            for (ScalarUInt32 i = 0; i < result_size; ++i) {
+                Float interpolated_coef = (1 - t_rem) * (1 - albedo[i/nb_params]) * t_low_a_low[i] +
+                                          (1 - t_rem) * albedo[i/nb_params]       * t_low_a_high[i] +
+                                          t_rem       * (1 - albedo[i/nb_params]) * t_high_a_low[i] +
+                                          t_rem       * albedo[i/nb_params]       * t_high_a_high[i];
 
-            std::vector<ScalarFloat>
-                res_a_low = lerp_vectors(t_low_a_low, t_high_a_low, t_rem),
-                res_a_high = lerp_vectors(t_low_a_high, t_high_a_high, t_rem);
-
-            std::vector<ScalarFloat> temp_res(result_size);
-            for (size_t i = 0; i < result_size; ++i)
-                temp_res[i] = dr::lerp(res_a_low[i], res_a_high[i], albedo[i/nb_params]);
-
-            res = dr::load<FloatStorage>(temp_res.data(), temp_res.size());
+                dr::scatter(res, interpolated_coef, i);
+            }
         }
 
         return res;
@@ -346,8 +326,8 @@ NAMESPACE_BEGIN(mitsuba)
         return from_spherical(Point<dr::value_t<Float>, 2>(azimuth, elevation));
     }
 
-    template <typename Float>
-    DynamicBuffer<Float> compute_sun_params(const std::vector<dr::value_t<Float>>& sun_radiance_dataset, Float turbidity) {
+    template <uint32_t dataset_size, typename Float>
+    DynamicBuffer<Float> compute_sun_params(const DynamicBuffer<Float>& sun_radiance_dataset, Float turbidity) {
         using UInt32 = dr::uint32_array_t<Float>;
         using FloatStorage = DynamicBuffer<Float>;
 
@@ -356,29 +336,24 @@ NAMESPACE_BEGIN(mitsuba)
                t_low = dr::maximum(t_int - 1, 0),
                t_high = dr::minimum(t_low + 1, NB_TURBIDITY - 1);
 
-        dr::value_t<UInt32> t_block_size = sun_radiance_dataset.size() / NB_TURBIDITY;
+        constexpr uint32_t t_block_size = dataset_size / NB_TURBIDITY;
 
-        FloatStorage res;
+        FloatStorage res = dr::zeros<FloatStorage>(t_block_size);
         if constexpr (dr::is_array_v<Float>) {
             UInt32 idx = dr::arange<UInt32>(t_block_size);
-            FloatStorage sun_data_v = dr::load<FloatStorage>(sun_radiance_dataset.data(), sun_radiance_dataset.size());
 
-            res = dr::lerp(dr::gather<Float>(sun_data_v, t_low * t_block_size + idx),
-                           dr::gather<Float>(sun_data_v, t_high * t_block_size + idx),
+            res = dr::lerp(dr::gather<Float>(sun_radiance_dataset, t_low * t_block_size + idx),
+                           dr::gather<Float>(sun_radiance_dataset, t_high * t_block_size + idx),
                            turbidity - t_int);
 
         } else {
-            using ScalarFloat = dr::value_t<Float>;
 
-            std::vector<ScalarFloat> temp_res = std::vector<ScalarFloat>(t_block_size);
-            for (uint32_t i = 0; i < t_block_size; ++i) {
-                ScalarFloat t_low_val  = sun_radiance_dataset[t_low  * t_block_size + i],
-                            t_high_val = sun_radiance_dataset[t_high * t_block_size + i];
+            for (UInt32 i = 0; i < t_block_size; ++i) {
+               Float temp = dr::lerp(sun_radiance_dataset[t_low  * t_block_size + i],
+                                     sun_radiance_dataset[t_high * t_block_size + i], turbidity - t_int);
 
-                res[i] = dr::lerp(t_low_val, t_high_val, turbidity - t_int);
+                dr::scatter(res, temp, i);
             }
-
-            res = dr::load<FloatStorage>(temp_res.data(), temp_res.size());
         }
 
         return res;
@@ -388,11 +363,10 @@ NAMESPACE_BEGIN(mitsuba)
     // ======================================== SAMPLING MODEL ========================================
     // ================================================================================================
 
-    template <typename Float> std::pair<DynamicBuffer<Float>, DynamicBuffer<Float>>
-    compute_tgmm_distribution(const std::vector<dr::value_t<Float>>& tgmm_tables, Float turbidity, Float eta) {
+    template <uint32_t dataset_size, typename Float>
+    auto compute_tgmm_distribution(const DynamicBuffer<Float>& tgmm_tables, Float turbidity, Float eta) {
         using FloatStorage = DynamicBuffer<Float>;
         using UInt32 = dr::uint32_array_t<Float>;
-        using ScalarUInt32 = dr::value_t<UInt32>;
 
         eta = dr::rad_to_deg(eta);
         Float eta_idx_f = dr::clip((eta - 2) / 3, 0, NB_ETAS - 1),
@@ -407,14 +381,13 @@ NAMESPACE_BEGIN(mitsuba)
         Float eta_rem = eta_idx_f - eta_idx_low,
               t_rem = t_idx_f - t_idx_low;
 
-        const ScalarUInt32 t_block_size = (ScalarUInt32) tgmm_tables.size() / (NB_TURBIDITY - 1),
+        constexpr uint32_t t_block_size = dataset_size / (NB_TURBIDITY - 1),
                            eta_block_size = t_block_size / NB_ETAS;
 
-        FloatStorage distrib_params, mis_weights;
+        FloatStorage distrib_params = dr::zeros<FloatStorage>(4 * eta_block_size),
+                     mis_weights = dr::zeros<FloatStorage>(4 * NB_GAUSSIAN);
         if constexpr (dr::is_array_v<Float>) {
             using Mask = dr::mask_t<Float>;
-
-            FloatStorage tgmm_tables_v = dr::load<FloatStorage>(tgmm_tables.data(), tgmm_tables.size());
 
             // ==================== BUILD INDICES TO EXTRACT 4 MIXTURES AT ONCE ====================
             UInt32 idx_idx = dr::arange<UInt32>(4 * eta_block_size),
@@ -427,7 +400,7 @@ NAMESPACE_BEGIN(mitsuba)
             idx += eta_block_size * dr::select(is_eta_low, eta_idx_low, eta_idx_high);
 
             // Extract parameters
-            distrib_params = dr::gather<FloatStorage>(tgmm_tables_v, idx);
+            distrib_params = dr::gather<FloatStorage>(tgmm_tables, idx);
 
             // ==================== APPLY LERP FACTOR TO CORRESPONDING GAUSSIAN WEIGHTS ====================
             Mask is_gaussian_weight = idx_idx % NB_GAUSSIAN_PARAMS == 4;
@@ -457,26 +430,25 @@ NAMESPACE_BEGIN(mitsuba)
             };
 
             // ==================== EXTRACT PARAMETERS AND APPLY LERP WEIGHT ====================
-            std::vector<Float> temp_distrib_params(4 * eta_block_size);
-            for (size_t mixture_idx = 0; mixture_idx < 4; ++mixture_idx) {
-                for (size_t param_idx = 0; param_idx < eta_block_size; ++param_idx) {
+            for (UInt32 mixture_idx = 0; mixture_idx < 4; ++mixture_idx) {
+                for (UInt32 param_idx = 0; param_idx < eta_block_size; ++param_idx) {
+
                     UInt32 index = mixture_idx * eta_block_size + param_idx;
-                    temp_distrib_params[index] = tgmm_tables[indices[mixture_idx] + param_idx];
-                    temp_distrib_params[index] *= index % NB_GAUSSIAN_PARAMS == 4 ? lerp_factors[mixture_idx] : 1;
+                    Float value = tgmm_tables[indices[mixture_idx] + param_idx] *
+                                  (index % NB_GAUSSIAN_PARAMS) == 4 ? lerp_factors[mixture_idx] : 1;
+
+                    dr::scatter(distrib_params, value, index);
                 }
             }
 
             // ============================= EXTRACT MIS WEIGHTS ================================
-            std::vector<Float> temp_mis_weights(4 * NB_GAUSSIAN);
-            for (size_t gaussian_idx = 0; gaussian_idx < 4 * NB_GAUSSIAN; ++gaussian_idx)
-                temp_mis_weights[gaussian_idx] = temp_distrib_params[gaussian_idx * NB_GAUSSIAN_PARAMS + 4];
+            for (UInt32 gaussian_idx = 0; gaussian_idx < 4 * NB_GAUSSIAN; ++gaussian_idx)
+                dr::scatter(mis_weights, distrib_params[gaussian_idx * NB_GAUSSIAN_PARAMS + 4], gaussian_idx);
 
-            distrib_params = dr::load<FloatStorage>(temp_distrib_params.data(), temp_distrib_params.size());
-            mis_weights = dr::load<FloatStorage>(temp_mis_weights.data(), temp_mis_weights.size());
         }
 
 
-        return {distrib_params, mis_weights};
+        return std::make_pair(distrib_params, mis_weights);
     }
 
     // ================================================================================================
@@ -484,8 +456,12 @@ NAMESPACE_BEGIN(mitsuba)
     // ================================================================================================
 
     template<typename FileType, typename OutType>
-    std::vector<OutType> array_from_file(const std::string &path) {
+    DynamicBuffer<OutType> array_from_file(const std::string &path) {
         FileStream file(path, FileStream::EMode::ERead);
+
+        using ScalarFileType = dr::value_t<FileType>;
+        using FileStorage = DynamicBuffer<FileType>;
+        using FloatStorage = DynamicBuffer<OutType>;
 
         // =============== Read headers ===============
         char text_buff[5] = "";
@@ -513,18 +489,18 @@ NAMESPACE_BEGIN(mitsuba)
         }
 
         // ==================== Read data ====================
-        std::vector<FileType> data_f(nb_elements);
-        file.read_array(data_f.data(), nb_elements);
+        std::vector<ScalarFileType> buffer(nb_elements);
+        file.read_array(buffer.data(), nb_elements);
         file.close();
 
-        return std::vector<OutType>(data_f.begin(), data_f.end());
+        FileStorage data_f = dr::load<FileStorage>(buffer.data(), nb_elements);
+
+        return FloatStorage(data_f);
     }
 
     template<typename Float>
-    void array_to_file(const std::string &path, const DynamicBuffer<Float>& data, const std::vector<size_t>& shape = {}) {
-        std::vector<size_t> _shape = shape.empty() ? std::vector<size_t>{data.size()} : shape;
-        if (_shape.empty())
-            _shape.push_back(data.size());
+    void array_to_file(const std::string &path, const DynamicBuffer<Float>& data, std::vector<size_t> shape = {}) {
+        if (shape.empty()) shape.push_back(data.size());
 
         FileStream file(path, FileStream::EMode::ETruncReadWrite);
 
@@ -534,9 +510,9 @@ NAMESPACE_BEGIN(mitsuba)
         file.write((uint32_t) 0);
 
         // =============== Write dimensions ===============
-        file.write((size_t) _shape.size());
+        file.write((size_t) shape.size());
 
-        for (size_t dim_length : _shape) {
+        for (size_t dim_length : shape) {
             file.write(dim_length);
 
             if (!dim_length)

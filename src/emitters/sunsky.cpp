@@ -95,31 +95,30 @@ public:
         dr::make_opaque(m_sun_phi, m_local_sun_frame);
 
         // ================= GET SKY RADIANCE =================
-        m_sky_dataset = array_from_file<double, ScalarFloat>(DATABASE_PATH + DATASET_NAME + ".bin");
-        m_sky_rad_dataset = array_from_file<double, ScalarFloat>(DATABASE_PATH + DATASET_NAME + "_rad.bin");
+        m_sky_dataset = array_from_file<Float64, Float>(DATABASE_PATH + DATASET_NAME + ".bin");
+        m_sky_rad_dataset = array_from_file<Float64, Float>(DATABASE_PATH + DATASET_NAME + "_rad.bin");
 
-        m_sky_params = compute_radiance_params(m_sky_dataset, albedo, m_turbidity, sun_eta),
-        m_sky_radiance = compute_radiance_params(m_sky_rad_dataset, albedo, m_turbidity, sun_eta);
+        m_sky_params = compute_radiance_params<SKY_DATASET_SIZE>(m_sky_dataset, albedo, m_turbidity, sun_eta),
+        m_sky_radiance = compute_radiance_params<SKY_DATASET_RAD_SIZE>(m_sky_rad_dataset, albedo, m_turbidity, sun_eta);
 
         dr::make_opaque(m_sky_params, m_sky_radiance);
 
         // ================= GET SUN RADIANCE =================
-        m_sun_rad_dataset = array_from_file<double, ScalarFloat>(DATABASE_PATH + DATASET_NAME + "_solar.bin");
+        m_sun_rad_dataset = array_from_file<Float64, Float>(DATABASE_PATH + DATASET_NAME + "_solar.bin");
 
-        m_sun_radiance = compute_sun_params(m_sun_rad_dataset, m_turbidity);
+        m_sun_radiance = compute_sun_params<SUN_DATASET_SIZE>(m_sun_rad_dataset, m_turbidity);
 
         dr::make_opaque(m_sun_radiance);
 
         // Only used in spectral mode since limb darkening is baked in the RGB dataset
-        if constexpr (is_spectral_v<Spectrum>) {
-            m_sun_ld_dataset = array_from_file<double, ScalarFloat>(DATABASE_PATH DATABASE_PREFIX "_ld_sun.bin");
-            m_sun_ld = dr::load<FloatStorage>(m_sun_ld_dataset.data(), m_sun_ld_dataset.size());
-        }
+        if constexpr (is_spectral_v<Spectrum>)
+            m_sun_ld = array_from_file<Float64, Float>(DATABASE_PATH DATABASE_PREFIX "_ld_sun.bin");
+
 
         // ================= GET TGMM TABLES =================
-        m_tgmm_tables = array_from_file<float, ScalarFloat>(DATABASE_PATH "tgmm_tables.bin");
+        m_tgmm_tables = array_from_file<Float, Float>(DATABASE_PATH "tgmm_tables.bin");
 
-        const auto [distrib_params, mis_weights] = compute_tgmm_distribution(m_tgmm_tables, m_turbidity, sun_eta);
+        const auto [distrib_params, mis_weights] = compute_tgmm_distribution<TGMM_DATA_SIZE>(m_tgmm_tables, m_turbidity, sun_eta);
 
         m_gaussians = distrib_params;
         m_gaussian_distr = DiscreteDistribution<Float>(mis_weights);
@@ -292,7 +291,12 @@ private:
         DATABASE_PREFIX "_rgb";
 
     static constexpr ScalarFloat SIN_OFFSET = 0.00775;
-    static constexpr size_t NB_CHANNELS = is_spectral_v<Spectrum> ? NB_WAVELENGTHS : 3;
+    static constexpr uint32_t NB_CHANNELS = is_spectral_v<Spectrum> ? NB_WAVELENGTHS : 3;
+
+    static constexpr uint32_t SKY_DATASET_SIZE = NB_TURBIDITY * NB_ALBEDO * NB_SKY_CTRL_PTS * NB_CHANNELS * NB_SKY_PARAMS,
+                              SKY_DATASET_RAD_SIZE = NB_TURBIDITY * NB_ALBEDO * NB_SKY_CTRL_PTS * NB_CHANNELS,
+                              SUN_DATASET_SIZE = NB_TURBIDITY * NB_CHANNELS * NB_SUN_SEGMENTS * NB_SUN_CTRL_PTS * (is_spectral_v<Spectrum> ? 1 : NB_SUN_LD_PARAMS),
+                              TGMM_DATA_SIZE = (NB_TURBIDITY - 1) * NB_ETAS * NB_GAUSSIAN * NB_GAUSSIAN_PARAMS;
 
     const Float m_sun_cos_cutoff = (Float) dr::cos(0.5 * SUN_APERTURE * dr::Pi<double> / 180.0);
 
@@ -311,7 +315,6 @@ private:
     // Radiance parameters
     FloatStorage m_sky_params;
     FloatStorage m_sky_radiance;
-    FloatStorage m_sun_ld;
     FloatStorage m_sun_radiance;
 
     // Sampling parameters
@@ -321,11 +324,11 @@ private:
     ref<Texture> m_d65;
 
     // Permanent datasets loaded from files/memory
-    std::vector<ScalarFloat> m_sky_dataset;
-    std::vector<ScalarFloat> m_sky_rad_dataset;
-    std::vector<ScalarFloat> m_sun_ld_dataset;
-    std::vector<ScalarFloat> m_sun_rad_dataset;
-    std::vector<ScalarFloat> m_tgmm_tables;
+    FloatStorage m_sky_dataset;
+    FloatStorage m_sky_rad_dataset;
+    FloatStorage m_sun_ld;
+    FloatStorage m_sun_rad_dataset;
+    FloatStorage m_tgmm_tables;
 
 
     Spectrum render_sky(const SpecUInt32& channel_idx,
