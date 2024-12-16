@@ -346,21 +346,39 @@ NAMESPACE_BEGIN(mitsuba)
         return from_spherical(Point<dr::value_t<Float>, 2>(azimuth, elevation));
     }
 
-    template <typename ScalarFloat>
-    std::vector<ScalarFloat> compute_sun_params(const std::vector<ScalarFloat>& sun_radiance_dataset, ScalarFloat turbidity) {
+    template <typename Float>
+    DynamicBuffer<Float> compute_sun_params(const std::vector<dr::value_t<Float>>& sun_radiance_dataset, Float turbidity) {
+        using UInt32 = dr::uint32_array_t<Float>;
+        using FloatStorage = DynamicBuffer<Float>;
+
         turbidity = dr::clip(turbidity, 1.f, 10.f);
-        uint32_t t_int = dr::floor2int<uint32_t>(turbidity),
-                 t_low = dr::maximum(t_int - 1, 0),
-                 t_high = dr::minimum(t_low + 1, NB_TURBIDITY - 1);
+        UInt32 t_int = dr::floor2int<UInt32>(turbidity),
+               t_low = dr::maximum(t_int - 1, 0),
+               t_high = dr::minimum(t_low + 1, NB_TURBIDITY - 1);
 
-        uint32_t t_block_size = sun_radiance_dataset.size() / NB_TURBIDITY;
+        dr::value_t<UInt32> t_block_size = sun_radiance_dataset.size() / NB_TURBIDITY;
 
-        std::vector<ScalarFloat> res = std::vector<ScalarFloat>(t_block_size);
-        for (uint32_t i = 0; i < t_block_size; ++i) {
-            ScalarFloat t_low_val  = sun_radiance_dataset[t_low  * t_block_size + i],
-                        t_high_val = sun_radiance_dataset[t_high * t_block_size + i];
+        FloatStorage res;
+        if constexpr (dr::is_array_v<Float>) {
+            UInt32 idx = dr::arange<UInt32>(t_block_size);
+            FloatStorage sun_data_v = dr::load<FloatStorage>(sun_radiance_dataset.data(), sun_radiance_dataset.size());
 
-            res[i] = dr::lerp(t_low_val, t_high_val, turbidity - t_int);
+            res = dr::lerp(dr::gather<Float>(sun_data_v, t_low * t_block_size + idx),
+                           dr::gather<Float>(sun_data_v, t_high * t_block_size + idx),
+                           turbidity - t_int);
+
+        } else {
+            using ScalarFloat = dr::value_t<Float>;
+
+            std::vector<ScalarFloat> temp_res = std::vector<ScalarFloat>(t_block_size);
+            for (uint32_t i = 0; i < t_block_size; ++i) {
+                ScalarFloat t_low_val  = sun_radiance_dataset[t_low  * t_block_size + i],
+                            t_high_val = sun_radiance_dataset[t_high * t_block_size + i];
+
+                res[i] = dr::lerp(t_low_val, t_high_val, turbidity - t_int);
+            }
+
+            res = dr::load<FloatStorage>(temp_res.data(), temp_res.size());
         }
 
         return res;
@@ -372,7 +390,6 @@ NAMESPACE_BEGIN(mitsuba)
 
     template <typename Float> std::pair<DynamicBuffer<Float>, DynamicBuffer<Float>>
     compute_tgmm_distribution(const std::vector<dr::value_t<Float>>& tgmm_tables, Float turbidity, Float eta) {
-
         using FloatStorage = DynamicBuffer<Float>;
         using UInt32 = dr::uint32_array_t<Float>;
         using ScalarUInt32 = dr::value_t<UInt32>;

@@ -105,14 +105,16 @@ public:
 
         // ================= GET SUN RADIANCE =================
         m_sun_rad_dataset = array_from_file<double, ScalarFloat>(DATABASE_PATH + DATASET_NAME + "_solar.bin");
+
+        m_sun_radiance = compute_sun_params(m_sun_rad_dataset, m_turbidity);
+
+        dr::make_opaque(m_sun_radiance);
+
         // Only used in spectral mode since limb darkening is baked in the RGB dataset
         if constexpr (is_spectral_v<Spectrum>) {
             m_sun_ld_dataset = array_from_file<double, ScalarFloat>(DATABASE_PATH DATABASE_PREFIX "_ld_sun.bin");
             m_sun_ld = dr::load<FloatStorage>(m_sun_ld_dataset.data(), m_sun_ld_dataset.size());
         }
-
-        update_sun_radiance(m_turbidity);
-
 
         // ================= GET TGMM TABLES =================
         m_tgmm_tables = array_from_file<float, ScalarFloat>(DATABASE_PATH "tgmm_tables.bin");
@@ -464,21 +466,6 @@ private:
 
         return dr::select(active, pdf, 0.0);
     }
-
-    void update_sun_radiance(const Float& turbidity) {
-        m_sun_scale = 0.f;
-        if constexpr (dr::is_array_v<Float>) {
-
-            m_sun_radiance = dr::zeros<FloatStorage>(10000000);
-
-        } else {
-            std::vector<ScalarFloat> sun_radiance = compute_sun_params(m_sun_rad_dataset, turbidity);
-            m_sun_radiance = dr::load<FloatStorage>(sun_radiance.data(), sun_radiance.size());
-        }
-
-        dr::make_opaque(m_sun_radiance);
-    }
-
 
     Albedo extract_albedo(const ref<Texture>& albedo) const {
         Albedo albedo_buff = {};
