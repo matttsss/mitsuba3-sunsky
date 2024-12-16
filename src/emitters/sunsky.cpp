@@ -406,14 +406,14 @@ private:
                       cdf_b = gaussian_cdf(mu, sigma, b);
 
         sample = dr::lerp(cdf_a, cdf_b, sample);
+        sample = dr::clip(sample, dr::Epsilon<Float>, dr::OneMinusEpsilon<Float>);
+
         Point2f angles = dr::SqrtTwo<Float> * dr::erfinv(2 * sample - 1) * sigma + mu;
         // From fixed reference frame where sun_phi = pi/2 to local frame
         angles.x() += m_sun_phi - 0.5f * dr::Pi<Float>;
+        angles.y() = dr::minimum(angles.y(), 0.5f * dr::Pi<Float> - dr::Epsilon<Float>);
 
-        Float pdf = tgmm_pdf(angles, active);
-        Vector3f sky_sample = dr::normalize(to_spherical(angles));
-
-        return { sky_sample, pdf };
+        return { to_spherical(angles), tgmm_pdf(angles, active) };
     }
 
     std::pair<Vector3f, Float> sample_sun(const Point2f& sample) const {

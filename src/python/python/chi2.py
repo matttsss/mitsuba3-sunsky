@@ -137,7 +137,6 @@ class ChiSquareTest:
         eps = self.bounds.extents() * 1e-4
         in_domain = dr.all((xy >= self.bounds.min - eps) &
                            (xy <= self.bounds.max + eps))
-        in_domain |= weights_out == 0
         if not dr.all(in_domain):
             self._log('Encountered samples outside of the specified '
                       'domain!')
@@ -145,7 +144,6 @@ class ChiSquareTest:
 
         # Normalize position values
         xy = (xy - self.bounds.min) / self.bounds.extents()
-        mask = dr.all((xy >= mi.Point2f(0)) & (xy <= mi.Point2f(1)))
         xy = mi.Vector2u(dr.clip(xy * mi.Vector2f(self.res), 0,
                                  mi.Vector2f(self.res - 1)))
 
@@ -157,8 +155,7 @@ class ChiSquareTest:
             self.histogram,
             weights_out,
             xy.x + xy.y * self.res.x,
-            mask
-        )
+            )
 
         histogram_min = dr.min(self.histogram)
 
@@ -306,7 +303,7 @@ class ChiSquareTest:
         # probability of a failure increases quickly when several hypothesis
         # tests are run in sequence.
         significance_level = 1.0 - \
-            (1.0 - significance_level) ** (1.0 / test_count)
+                             (1.0 - significance_level) ** (1.0 / test_count)
 
         if self.fail:
             self._log('Not running the test for reasons listed above. Target '
@@ -418,7 +415,6 @@ class PlanarDomain:
 
 class SphericalDomain:
     'Maps between the unit sphere and a [cos(theta), phi] parameterization.'
-    # return mi.ScalarBoundingBox2f([-dr.pi, -1], [dr.pi, 1])
 
     def bounds(self):
         return mi.ScalarBoundingBox2f([-dr.pi, -1], [dr.pi, 1])
@@ -558,8 +554,7 @@ def EmitterAdapter(emitter_type, extra):
         plugin = instantiate(args)
         si = dr.zeros(mi.Interaction3f)
         ds, w = plugin.sample_direction(si, sample)
-        weights = dr.ones(mi.Float, n) & (ds.pdf != 0.0)
-        return ds.d, weights
+        return ds.d
 
     def pdf_functor(wo, *args):
         n = dr.width(wo)
