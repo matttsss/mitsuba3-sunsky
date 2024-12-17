@@ -150,7 +150,7 @@ NAMESPACE_BEGIN(mitsuba)
         const uint32_t t_block_size = dataset_size / NB_TURBIDITY,
                        a_block_size = t_block_size  / NB_ALBEDO,
                        result_size  = a_block_size / NB_SKY_CTRL_PTS,
-                       nb_params    = result_size / albedo.size(); // Either 1 or 9
+                       nb_params    = result_size / albedo.size();
                                                  // albedo.size() <==> NB_CHANNELS
 
         FloatStorage
@@ -329,6 +329,7 @@ NAMESPACE_BEGIN(mitsuba)
     template <uint32_t dataset_size, typename Float>
     DynamicBuffer<Float> compute_sun_params(const DynamicBuffer<Float>& sun_radiance_dataset, Float turbidity) {
         using UInt32 = dr::uint32_array_t<Float>;
+        using UInt32Storage = DynamicBuffer<dr::uint32_array_t<Float>>;
         using FloatStorage = DynamicBuffer<Float>;
 
         turbidity = dr::clip(turbidity, 1.f, 10.f);
@@ -338,25 +339,10 @@ NAMESPACE_BEGIN(mitsuba)
 
         constexpr uint32_t t_block_size = dataset_size / NB_TURBIDITY;
 
-        FloatStorage res = dr::zeros<FloatStorage>(t_block_size);
-        if constexpr (dr::is_array_v<Float>) {
-            UInt32 idx = dr::arange<UInt32>(t_block_size);
-
-            res = dr::lerp(dr::gather<Float>(sun_radiance_dataset, t_low * t_block_size + idx),
-                           dr::gather<Float>(sun_radiance_dataset, t_high * t_block_size + idx),
-                           turbidity - t_int);
-
-        } else {
-
-            for (UInt32 i = 0; i < t_block_size; ++i) {
-               Float temp = dr::lerp(sun_radiance_dataset[t_low  * t_block_size + i],
-                                     sun_radiance_dataset[t_high * t_block_size + i], turbidity - t_int);
-
-                dr::scatter(res, temp, i);
-            }
-        }
-
-        return res;
+        UInt32Storage idx = dr::arange<UInt32Storage>(t_block_size);
+        return dr::lerp(dr::gather<FloatStorage>(sun_radiance_dataset, t_low * t_block_size + idx),
+                        dr::gather<FloatStorage>(sun_radiance_dataset, t_high * t_block_size + idx),
+                        turbidity - t_int);
     }
 
     // ================================================================================================
