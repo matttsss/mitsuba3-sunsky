@@ -48,7 +48,7 @@ NAMESPACE_BEGIN(mitsuba)
     /// Number of parameters for each gaussian component
     #define NB_GAUSSIAN_PARAMS 5
 
-    /// Sun aperture angle in radians
+    /// Sun aperture angle in degrees
     #define SUN_APERTURE 0.5358
     /// Mean radius of the Earth
     #define EARTH_MEAN_RADIUS 6371.01   // In km
@@ -83,7 +83,16 @@ NAMESPACE_BEGIN(mitsuba)
     // ========================================== SKY MODEL ===========================================
     // ================================================================================================
 
-    template<typename Float>
+    /**
+     * \brief Interpolates the dataset along a quintic bezier curve
+     *
+     * @param dataset Dataset to interpolate using a degree 5 bezier curve
+     * @param out_size Size of the data to interpolate
+     * @param offset Offset to apply to the indices
+     * @param x Interpolation factor
+     * @return Interpolated data
+     */
+    template <typename Float>
     DynamicBuffer<Float> bezier_interpolate(
         const DynamicBuffer<Float>& dataset, const uint32_t out_size,
         const dr::uint32_array_t<Float>& offset, const Float& x) {
@@ -104,7 +113,17 @@ NAMESPACE_BEGIN(mitsuba)
         return res;
     }
 
-
+    /**
+     * \brief Pre-computes the sky dataset using turbidity, albedo and sun
+     * elevation
+     *
+     * @tparam dataset_size Size of the dataset
+     * @param dataset Dataset to interpolate
+     * @param albedo Albedo values corresponding to each channel
+     * @param turbidity Turbidity used for the skylight model
+     * @param eta Sun elevation angle
+     * @return The interpolated dataset
+     */
     template <uint32_t dataset_size, typename Float, typename Albedo>
     DynamicBuffer<Float> compute_radiance_params(
         const DynamicBuffer<Float>& dataset,
@@ -113,6 +132,7 @@ NAMESPACE_BEGIN(mitsuba)
         using UInt32 = dr::uint32_array_t<Float>;
         using FloatStorage = DynamicBuffer<Float>;
 
+        // Clip parameters to valid ranges
         turbidity = dr::clip(turbidity, 1.f, NB_TURBIDITY);
         eta = dr::clip(eta, 0.f, 0.5f * dr::Pi<Float>);
 
@@ -124,12 +144,14 @@ NAMESPACE_BEGIN(mitsuba)
 
         Float t_rem = turbidity - t_int;
 
+        // Compute block sizes for each parameter to facilitate indexing
         const uint32_t t_block_size = dataset_size / NB_TURBIDITY,
                        a_block_size = t_block_size  / NB_ALBEDO,
                        result_size  = a_block_size / NB_SKY_CTRL_PTS,
                        nb_params    = result_size / albedo.size();
                                                  // albedo.size() <==> NB_CHANNELS
 
+        // Interpolate on elevation
         FloatStorage
             t_low_a_low = bezier_interpolate(dataset, result_size, t_low * t_block_size + 0 * a_block_size, x),
             t_high_a_low = bezier_interpolate(dataset, result_size, t_high * t_block_size + 0 * a_block_size, x),
@@ -138,9 +160,11 @@ NAMESPACE_BEGIN(mitsuba)
 
         FloatStorage albedo_storage = dr::load<FloatStorage>(albedo.data(), albedo.size());
 
+        // Interpolate on turbidity
         FloatStorage res_a_low = dr::lerp(t_low_a_low, t_high_a_low, t_rem),
                      res_a_high = dr::lerp(t_low_a_high, t_high_a_high, t_rem);
 
+        // Interpolate on albedo
         FloatStorage res;
         if constexpr (dr::is_array_v<Float>) {
             res = dr::lerp(res_a_low, res_a_high, dr::repeat(albedo_storage, nb_params));
@@ -295,6 +319,15 @@ NAMESPACE_BEGIN(mitsuba)
         return from_spherical(Point<dr::value_t<Float>, 2>(azimuth, elevation));
     }
 
+    /**
+     * \brief Collects and linearly interpolates the sun radiance dataset along
+     * turbidity
+     *
+     * @tparam dataset_size Size of the dataset
+     * @param sun_radiance_dataset Dataset to interpolate
+     * @param turbidity Turbidity used for the skylight model
+     * @return The interpolated dataset
+     */
     template <uint32_t dataset_size, typename Float>
     DynamicBuffer<Float> compute_sun_params(const DynamicBuffer<Float>& sun_radiance_dataset, Float turbidity) {
         using UInt32 = dr::uint32_array_t<Float>;
@@ -318,12 +351,26 @@ NAMESPACE_BEGIN(mitsuba)
     // ======================================== SAMPLING MODEL ========================================
     // ================================================================================================
 
+    /**
+     * \brief Extracts the Gaussian Mixture Model parameters from the TGMM dataset
+     * The 4 * (5 gaussians) cannot be interpolated directly, so we need to
+     * combine them and adjust the weights based on the elevation and turbidity
+     * linear interpolation parameters.
+     *
+     * @tparam dataset_size Size of the TGMM dataset
+     * @param tgmm_tables Dataset for the Gaussian Mixture Models
+     * @param turbidity Turbidity used for the skylight model
+     * @param eta Elevation of the sun
+     * @return The new distribution parameters and the mixture weights
+     */
     template <uint32_t dataset_size, typename Float>
     auto compute_tgmm_distribution(const DynamicBuffer<Float>& tgmm_tables, Float turbidity, Float eta) {
         using UInt32 = dr::uint32_array_t<Float>;
         using ScalarUInt32 = dr::value_t<UInt32>;
         using UInt32Storage = DynamicBuffer<UInt32>;
         using FloatStorage = DynamicBuffer<Float>;
+
+        // ============== EXTRACT INDEXES AND LERP WEIGHTS ==============
 
         eta = dr::rad_to_deg(eta);
         Float eta_idx_f = dr::clip((eta - 2) / 3, 0, NB_ETAS - 1),
@@ -356,7 +403,6 @@ NAMESPACE_BEGIN(mitsuba)
         };
 
         // ==================== EXTRACT PARAMETERS AND APPLY LERP WEIGHT ====================
-
         FloatStorage distrib_params = dr::zeros<FloatStorage>(4 * result_size);
         UInt32Storage param_indices = dr::arange<UInt32Storage>(result_size);
         for (ScalarUInt32 mixture_idx = 0; mixture_idx < 4; ++mixture_idx) {
@@ -376,6 +422,7 @@ NAMESPACE_BEGIN(mitsuba)
 
         }
 
+        // Extract gaussian weights
         UInt32Storage mis_weight_idx = NB_GAUSSIAN_PARAMS * dr::arange<UInt32Storage>(4 * NB_GAUSSIAN) + (NB_GAUSSIAN_PARAMS - 1);
         FloatStorage mis_weights = dr::gather<FloatStorage>(distrib_params, mis_weight_idx);
 
@@ -386,7 +433,15 @@ NAMESPACE_BEGIN(mitsuba)
     // =========================================== FILE I/O ===========================================
     // ================================================================================================
 
-    template<typename FileType, typename OutType>
+    /**
+     * \brief Extracts an array from a compatible file
+     *
+     * @tparam FileType Type of the data stored in the file
+     * @tparam OutType The type of the data to return
+     * @param path Path of the data file
+     * @return The extracted array
+     */
+    template <typename FileType, typename OutType>
     DynamicBuffer<OutType> array_from_file(const std::string &path) {
         FileStream file(path, FileStream::EMode::ERead);
 
@@ -429,6 +484,15 @@ NAMESPACE_BEGIN(mitsuba)
         return FloatStorage(data_f);
     }
 
+    /**
+    * \brief Writes a DynamicBuffer to a file with a specific format compatible
+    * with the sunsky model
+    *
+    * @tparam Float Type of the data to store in the file
+    * @param path Path of the data file
+    * @param data Data to store in the file
+    * @param shape Shape of the data to store (optional)
+    */
     template<typename Float>
     void array_to_file(const std::string &path, const DynamicBuffer<Float>& data, std::vector<size_t> shape = {}) {
         if (shape.empty()) shape.push_back(data.size());
@@ -456,12 +520,19 @@ NAMESPACE_BEGIN(mitsuba)
         file.close();
     }
 
-
-    template<typename Float>
+    /**
+     * \brief Extracts a tensor from a compatible file
+     *
+     * @tparam FileType Type of the data stored in the file
+     * @tparam OutType The type of the data to return
+     * @param path Path of the data file
+     * @return The extracted tensor
+     */
+    template <typename FileType, typename OutType>
     auto tensor_from_file(const std::string &path) {
-        using FloatStorage  = DynamicBuffer<Float>;
-        using DoubleStorage = dr::float64_array_t<FloatStorage>;
-        using TensorXf      = dr::Tensor<FloatStorage>;
+        using FloatStorage = DynamicBuffer<FileType>;
+        using FileStorage  = DynamicBuffer<OutType>;
+        using TensorXf     = dr::Tensor<FloatStorage>;
 
         FileStream file(path, FileStream::EMode::ERead);
 
@@ -496,7 +567,7 @@ NAMESPACE_BEGIN(mitsuba)
 
         file.read_array(buffer, nb_elements);
 
-        DoubleStorage data_d = dr::load<DoubleStorage>(buffer, nb_elements);
+        FileStorage data_d = dr::load<FileStorage>(buffer, nb_elements);
         FloatStorage data_v = FloatStorage(data_d);
 
         file.close();
@@ -527,6 +598,7 @@ NAMESPACE_BEGIN(mitsuba)
     enum class SunDataShapeIdx: uint32_t { WAVELENGTH = 0, TURBIDITY, SUN_SEGMENTS, SUN_CTRL_PTS };
     enum class SkyDataShapeIdx: uint32_t { WAVELENGTH = 0, ALBEDO, TURBIDITY, CTRL_PT, PARAMS };
 
+    // =========================== SHAPES OF THE ORIGINAL WILKIE-HOSEK DATASETS ============================
     constexpr size_t solar_shape[4] = {NB_WAVELENGTHS, NB_TURBIDITY, NB_SUN_SEGMENTS, NB_SUN_CTRL_PTS};
     constexpr size_t limb_darkening_shape[2] = {NB_WAVELENGTHS, 6};
 
@@ -536,6 +608,7 @@ NAMESPACE_BEGIN(mitsuba)
     constexpr size_t f_tri_shape[F_DIM] = {3, NB_ALBEDO, NB_TURBIDITY, NB_SKY_CTRL_PTS, NB_SKY_PARAMS};
     constexpr size_t l_tri_shape[L_DIM] = {3, NB_ALBEDO, NB_TURBIDITY, NB_SKY_CTRL_PTS};
 
+    /// Helper struct to link the dataset metadata
     struct Dataset {
         size_t nb_dims;
         const size_t* dim_size;
@@ -591,6 +664,11 @@ NAMESPACE_BEGIN(mitsuba)
         .dataset = limbDarkeningDatasets
     };
 
+    /**
+     * Serializes the Limb Darkening dataset to a file
+     *
+     * @param path Path of the file to write to
+     */
     void write_limb_darkening_data(const std::string& path) {
         const auto [nb_dims, dim_size, p_dataset] = limb_darkening_dataset;
         FileStream file(path, FileStream::EMode::ETruncReadWrite);
@@ -602,18 +680,23 @@ NAMESPACE_BEGIN(mitsuba)
         // Write tensor dimensions
         file.write(nb_dims);
 
-        // Write reordered shapes
-        // as [wavelengths x nb_params]
+        // Write shapes as [wavelengths x nb_params]
         file.write(dim_size[0]);
         file.write(dim_size[1]);
 
+        // Flatten the data to the file
         for (size_t w = 0; w < NB_WAVELENGTHS; ++w)
-            file.write(p_dataset[w], 6 * sizeof(double));
+            file.write_array(p_dataset[w], NB_SUN_LD_PARAMS);
 
         file.close();
     }
 
-
+    /**
+     * Precomputes the sun RGB dataset from the spectral dataset and
+     * the limb darkening dataset
+     *
+     * @param path Path of the file to write to
+     */
     void write_sun_data_rgb(const std::string& path) {
         const auto [nb_dims_solar, dim_size_solar, p_dataset_solar] = solar_dataset;
         const auto [nb_dims_ld, dim_size_ld, p_dataset_ld] = limb_darkening_dataset;
@@ -670,6 +753,13 @@ NAMESPACE_BEGIN(mitsuba)
         free(buffer);
     }
 
+    /**
+     * Re-orders the sun spectral dataset from the original dataset
+     * From [wavelengths x turbidity x sun_segments x sun_ctrl_pts]
+     * to   [turbidity x sun_segments x wavelengths x sun_ctrl_pts]
+     *
+     * @param path Path of the file to write to
+     */
     void write_sun_data_spectral(const std::string& path) {
         const auto [nb_dims, dim_size, p_dataset] = solar_dataset;
         FileStream file(path, FileStream::EMode::ETruncReadWrite);
@@ -705,6 +795,13 @@ NAMESPACE_BEGIN(mitsuba)
     }
 
 
+    /**
+     * Re-orders the sky dataset from the original dataset
+     * From [wavelengths/channels x albedo x turbidity x sky_ctrl_pts (x sky_params)]
+     * to   [turbidity x albedo x sky_ctrl_pts x wavelengths/channels (x sky_params)]
+     *
+     * @param path Path of the file to write to
+     */
     void write_sky_data(const std::string &path, const Dataset& dataset) {
         const auto [nb_dims, dim_size, p_dataset] = dataset;
         FileStream file(path, FileStream::EMode::ETruncReadWrite);
@@ -801,6 +898,7 @@ NAMESPACE_BEGIN(mitsuba)
     filename = "<path to>/model_hosek.csv"
     destination_folder = ...
 
+    # Delete unused data
     df = pd.read_csv(filename)
     df.pop('RMSE')
     df.pop('MAE')
@@ -810,8 +908,11 @@ NAMESPACE_BEGIN(mitsuba)
 
     arr = df.to_numpy()
 
+    # Sort the data by turbidity and elevation
     sort_args = np.lexsort([arr[::, 1], arr[::, 0]])
     simplified_arr = arr[sort_args, 2:]
+
+    # Convert the elevation to zenith angle on mu_theta
     simplified_arr[::, 1] = np.pi/2 - simplified_arr[::, 1]
 
     shape = (9, 30, 5, 5)

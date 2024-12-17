@@ -125,7 +125,7 @@ public:
 
         dr::make_opaque(m_gaussians, m_gaussian_distr);
 
-        // ================= GENERIC PARAMETERS =================
+        // ================= GENERAL PARAMETERS =================
 
         /* Until `set_scene` is called, we have no information
         about the scene and default to the unit bounding sphere. */
@@ -213,16 +213,19 @@ public:
                                                             Mask active) const override {
         MI_MASKED_FUNCTION(ProfilerPhase::EndpointSampleDirection, active);
 
-        ScalarFloat boundary = m_sky_scale / (m_sky_scale + m_sun_scale);
+        // Sample the sun or the sky
+        const ScalarFloat boundary = m_sky_scale / (m_sky_scale + m_sun_scale);
         auto [sample_dir, pdf] = dr::select(
                 sample.x() < boundary,
                 sample_sky({sample.x() / boundary, sample.y()}, active),
                 sample_sun({(sample.x() - boundary) / (1 - boundary), sample.y()})
         );
 
+        // Check for bounds on PDF
         Float sin_theta = Frame3f::sin_theta(sample_dir);
         active &= (Frame3f::cos_theta(sample_dir) >= 0.f) && (sin_theta != 0.f);
         sin_theta = dr::maximum(sin_theta, SIN_OFFSET);
+
         pdf = dr::select(active, pdf / sin_theta, 0.f);
 
         // Automatically enlarge the bounding sphere when it does not contain the reference point
@@ -253,11 +256,12 @@ public:
 
         Vector3f local_dir = dr::normalize(m_to_world.value().inverse().transform_affine(ds.d));
 
+        // Check for bounds on PDF
         Float sin_theta = Frame3f::sin_theta(local_dir);
         active &= (Frame3f::cos_theta(local_dir) >= 0.f) && (sin_theta != 0.f);
         sin_theta = dr::maximum(sin_theta, SIN_OFFSET);
 
-        Float sun_pdf = warp::square_to_uniform_cone_pdf<true>(m_local_sun_frame.to_local(local_dir), m_sun_cos_cutoff);
+        Float sun_pdf = warp::square_to_uniform_cone_pdf<true>(m_local_sun_frame.to_local(local_dir), SUN_COS_CUTOFF);
         Float sky_pdf = tgmm_pdf(from_spherical(local_dir), active) / sin_theta;
 
         Float combined_pdf = (m_sky_scale * sky_pdf + m_sun_scale * sun_pdf) / (m_sky_scale + m_sun_scale);
@@ -286,54 +290,10 @@ public:
     MI_DECLARE_CLASS()
 private:
 
-    const std::string DATASET_NAME = is_spectral_v<Spectrum> ?
-        DATABASE_PREFIX "_spec" :
-        DATABASE_PREFIX "_rgb";
-
-    static constexpr ScalarFloat SIN_OFFSET = 0.00775;
-    static constexpr uint32_t NB_CHANNELS = is_spectral_v<Spectrum> ? NB_WAVELENGTHS : 3;
-
-    static constexpr uint32_t SKY_DATASET_SIZE = NB_TURBIDITY * NB_ALBEDO * NB_SKY_CTRL_PTS * NB_CHANNELS * NB_SKY_PARAMS,
-                              SKY_DATASET_RAD_SIZE = NB_TURBIDITY * NB_ALBEDO * NB_SKY_CTRL_PTS * NB_CHANNELS,
-                              SUN_DATASET_SIZE = NB_TURBIDITY * NB_CHANNELS * NB_SUN_SEGMENTS * NB_SUN_CTRL_PTS * (is_spectral_v<Spectrum> ? 1 : NB_SUN_LD_PARAMS),
-                              TGMM_DATA_SIZE = (NB_TURBIDITY - 1) * NB_ETAS * NB_GAUSSIAN * NB_GAUSSIAN_PARAMS;
-
-    const Float m_sun_cos_cutoff = (Float) dr::cos(0.5 * SUN_APERTURE * dr::Pi<double> / 180.0);
-
-    Float m_surface_area;
-    BoundingSphere3f m_bsphere;
-
-    Float m_turbidity;
-    ScalarFloat m_sky_scale;
-    ScalarFloat m_sun_scale;
-    ref<Texture> m_albedo;
-
-    // Sun parameters
-    Float m_sun_phi;
-    Frame3f m_local_sun_frame;
-
-    // Radiance parameters
-    FloatStorage m_sky_params;
-    FloatStorage m_sky_radiance;
-    FloatStorage m_sun_radiance;
-
-    // Sampling parameters
-    FloatStorage m_gaussians;
-    DiscreteDistribution<Float> m_gaussian_distr;
-
-    ref<Texture> m_d65;
-
-    // Permanent datasets loaded from files/memory
-    FloatStorage m_sky_dataset;
-    FloatStorage m_sky_rad_dataset;
-    FloatStorage m_sun_ld;
-    FloatStorage m_sun_rad_dataset;
-    FloatStorage m_tgmm_tables;
-
-
     Spectrum render_sky(const SpecUInt32& channel_idx,
         const Float& cos_theta, const Float& cos_gamma, const SpecMask& active) const {
 
+        // Gather coefficients for the skylight equation
         Spectrum coefs[NB_SKY_PARAMS];
         for (uint8_t i = 0; i < NB_SKY_PARAMS; ++i)
             coefs[i] = dr::gather<Spectrum>(m_sky_params, channel_idx * NB_SKY_PARAMS + i, active);
@@ -349,14 +309,19 @@ private:
     }
 
     Spectrum render_sun(const SpecUInt32& channel_idx, const Float& cos_theta, const Float& cos_gamma, const SpecMask& active) const {
-        SpecMask hit_sun = active & (cos_gamma >= m_sun_cos_cutoff);
-        Float elevation =  0.5f * dr::Pi<Float> - dr::acos(cos_theta);
-        Float cos_phi = dr::safe_sqrt(1 - (1 - dr::square(cos_gamma)) / (1 - dr::square(m_sun_cos_cutoff)));
+        SpecMask hit_sun = active & (cos_gamma >= SUN_COS_CUTOFF);
 
+        // Angles computation
+        Float elevation =  0.5f * dr::Pi<Float> - dr::acos(cos_theta);
+        Float sin_gamma_sqr      = dr::fnmadd(cos_theta, cos_theta, 1.f),
+              sin_sun_cutoff_sqr = dr::fnmadd(SUN_COS_CUTOFF, SUN_COS_CUTOFF, 1.f);
+        Float cos_phi = dr::safe_sqrt(1 - sin_gamma_sqr / sin_sun_cutoff_sqr);
+
+        // Find the segment of the piecewise function we are in
         UInt32 pos = dr::floor2int<UInt32>(dr::pow(2 * elevation * dr::InvPi<Float>, 1.f/3.f) * NB_SUN_SEGMENTS);
         pos = dr::minimum(pos, NB_SUN_SEGMENTS - 1);
 
-        const Float break_x = 0.5f * dr::Pi<Float> * dr::pow((Float)(pos) / NB_SUN_SEGMENTS, 3.f);
+        const Float break_x = 0.5f * dr::Pi<Float> * dr::pow((Float)pos / NB_SUN_SEGMENTS, 3.f);
         const Float x = elevation - break_x;
 
         UnpolarizedSpectrum solar_radiance = 0.f;
@@ -383,6 +348,7 @@ private:
             SpecUInt32 global_idx = pos * (3 * NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS) +
                                     channel_idx * (NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS);
 
+            // TODO use dr::pow ?
             Float x_exp = 1.f;
             for (uint8_t k = 0; k < NB_SUN_CTRL_PTS; ++k) {
 
@@ -396,7 +362,7 @@ private:
             }
         }
 
-
+        // TODO negative values clamping (current not working)
         return dr::select(hit_sun & (solar_radiance > 0.f), solar_radiance, Spectrum(0.f));
     }
 
@@ -405,10 +371,10 @@ private:
     }
 
     std::pair<Vector3f, Float> sample_sky(const Point2f& sample_, const Mask& active) const {
+        // Sample a gaussian from the mixture
         const auto [idx, temp_sample] = m_gaussian_distr.sample_reuse(sample_.x(), active);
 
-        Point2f sample = {temp_sample, sample_.y()};
-
+        // {mu_phi, mu_theta, sigma_phi, sigma_theta, weight}
         Gaussian gaussian = dr::gather<Gaussian>(m_gaussians, idx, active);
 
         const Point2f a = { 0.0 },
@@ -420,39 +386,43 @@ private:
         const Point2f cdf_a = gaussian_cdf(mu, sigma, a),
                       cdf_b = gaussian_cdf(mu, sigma, b);
 
-        sample = dr::lerp(cdf_a, cdf_b, sample);
+        Point2f sample = dr::lerp(cdf_a, cdf_b, Point2f{temp_sample, sample_.y()});
+        // Clamp to erfinv's domain of definition
         sample = dr::clip(sample, dr::Epsilon<Float>, dr::OneMinusEpsilon<Float>);
 
         Point2f angles = dr::SqrtTwo<Float> * dr::erfinv(2 * sample - 1) * sigma + mu;
+
         // From fixed reference frame where sun_phi = pi/2 to local frame
         angles.x() += m_sun_phi - 0.5f * dr::Pi<Float>;
+        // Clamp theta to avoid negative z-axis values (FP errors)
         angles.y() = dr::minimum(angles.y(), 0.5f * dr::Pi<Float> - dr::Epsilon<Float>);
 
         return { to_spherical(angles), tgmm_pdf(angles, active) };
     }
 
     std::pair<Vector3f, Float> sample_sun(const Point2f& sample) const {
-        Vector3f sun_sample = warp::square_to_uniform_cone(sample, m_sun_cos_cutoff);
-        Float pdf = warp::square_to_uniform_cone_pdf(sun_sample, m_sun_cos_cutoff);
+        Vector3f sun_sample = warp::square_to_uniform_cone(sample, SUN_COS_CUTOFF);
+        Float pdf = warp::square_to_uniform_cone_pdf(sun_sample, SUN_COS_CUTOFF);
 
         return { m_local_sun_frame.to_world(sun_sample), pdf };
     }
 
     Float tgmm_pdf(Point2f angles, Mask active) const {
-        // From local frame to reference frame where sun_phi = pi/2
+        // From local frame to reference frame where sun_phi = pi/2 and phi is in [0, 2pi]
         angles.x() -= m_sun_phi - 0.5f * dr::Pi<Float>;
         angles.x() = dr::select(angles.x() < 0, angles.x() + dr::TwoPi<Float>, angles.x());
 
         // Bounds check for theta
         active &= (angles.y() >= 0.f) && (angles.y() <= 0.5f * dr::Pi<Float>);
 
+        // Bounding points of the truncated gaussian mixture
         const Point2f a = { 0.0 },
                       b = { dr::TwoPi<Float>, 0.5f * dr::Pi<Float> };
 
         Float pdf = 0.0;
         for (size_t i = 0; i < 4 * NB_GAUSSIAN; ++i) {
             const size_t base_idx = i * NB_GAUSSIAN_PARAMS;
-            //Gaussian gaussian = dr::gather<Gaussian>(m_gaussians, base_idx, active);
+            // {mu_phi, mu_theta}, {sigma_phi, sigma_theta}
             Point2f mu    = { m_gaussians[base_idx + 0], m_gaussians[base_idx + 1] },
                     sigma = { m_gaussians[base_idx + 2], m_gaussians[base_idx + 3] };
 
@@ -511,6 +481,58 @@ private:
 
         return albedo_buff;
     }
+
+    // ================================================================================================
+    // ========================================= ATTRIBUTES ===========================================
+    // ================================================================================================
+
+    const std::string DATASET_NAME = is_spectral_v<Spectrum> ?
+            DATABASE_PREFIX "_spec" :
+            DATABASE_PREFIX "_rgb";
+
+    /// Offset used to avoid division by zero in the pdf computation
+    static constexpr ScalarFloat SIN_OFFSET = 0.00775;
+    /// Number of channels used in the skylight model
+    static constexpr uint32_t NB_CHANNELS = is_spectral_v<Spectrum> ? NB_WAVELENGTHS : 3;
+
+    // Dataset sizes
+    static constexpr uint32_t SKY_DATASET_SIZE = NB_TURBIDITY * NB_ALBEDO * NB_SKY_CTRL_PTS * NB_CHANNELS * NB_SKY_PARAMS,
+                              SKY_DATASET_RAD_SIZE = NB_TURBIDITY * NB_ALBEDO * NB_SKY_CTRL_PTS * NB_CHANNELS,
+                              SUN_DATASET_SIZE = NB_TURBIDITY * NB_CHANNELS * NB_SUN_SEGMENTS * NB_SUN_CTRL_PTS * (is_spectral_v<Spectrum> ? 1 : NB_SUN_LD_PARAMS),
+                              TGMM_DATA_SIZE = (NB_TURBIDITY - 1) * NB_ETAS * NB_GAUSSIAN * NB_GAUSSIAN_PARAMS;
+
+    /// Cosine of the sun's cutoff angle
+    const Float SUN_COS_CUTOFF = (Float) dr::cos(0.5 * SUN_APERTURE * dr::Pi<double> / 180.0);
+
+    Float m_surface_area;
+    BoundingSphere3f m_bsphere;
+
+    Float m_turbidity;
+    ScalarFloat m_sky_scale;
+    ScalarFloat m_sun_scale;
+    ref<Texture> m_albedo;
+
+    // Sun parameters
+    Float m_sun_phi;
+    Frame3f m_local_sun_frame;
+
+    // Radiance parameters
+    FloatStorage m_sky_params;
+    FloatStorage m_sky_radiance;
+    FloatStorage m_sun_radiance;
+
+    // Sampling parameters
+    FloatStorage m_gaussians;
+    DiscreteDistribution<Float> m_gaussian_distr;
+
+    ref<Texture> m_d65;
+
+    // Permanent datasets loaded from files/memory
+    FloatStorage m_sky_dataset;
+    FloatStorage m_sky_rad_dataset;
+    FloatStorage m_sun_ld; // Not initialized in RGB mode
+    FloatStorage m_sun_rad_dataset;
+    FloatStorage m_tgmm_tables;
 
 };
 
