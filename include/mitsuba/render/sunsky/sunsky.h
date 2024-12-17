@@ -320,8 +320,10 @@ NAMESPACE_BEGIN(mitsuba)
 
     template <uint32_t dataset_size, typename Float>
     auto compute_tgmm_distribution(const DynamicBuffer<Float>& tgmm_tables, Float turbidity, Float eta) {
-        using FloatStorage = DynamicBuffer<Float>;
         using UInt32 = dr::uint32_array_t<Float>;
+        using ScalarUInt32 = dr::value_t<UInt32>;
+        using UInt32Storage = DynamicBuffer<UInt32>;
+        using FloatStorage = DynamicBuffer<Float>;
 
         eta = dr::rad_to_deg(eta);
         Float eta_idx_f = dr::clip((eta - 2) / 3, 0, NB_ETAS - 1),
@@ -337,71 +339,45 @@ NAMESPACE_BEGIN(mitsuba)
               t_rem = t_idx_f - t_idx_low;
 
         constexpr uint32_t t_block_size = dataset_size / (NB_TURBIDITY - 1),
-                           eta_block_size = t_block_size / NB_ETAS;
+                           result_size = t_block_size / NB_ETAS;
 
-        FloatStorage distrib_params = dr::zeros<FloatStorage>(4 * eta_block_size),
-                     mis_weights = dr::zeros<FloatStorage>(4 * NB_GAUSSIAN);
-        if constexpr (dr::is_array_v<Float>) {
-            using Mask = dr::mask_t<Float>;
+        const UInt32 indices[4] = {
+            t_idx_low * t_block_size + eta_idx_low * result_size,
+            t_idx_low * t_block_size + eta_idx_high * result_size,
+            t_idx_high * t_block_size + eta_idx_low * result_size,
+            t_idx_high * t_block_size + eta_idx_high * result_size
+        };
 
-            // ==================== BUILD INDICES TO EXTRACT 4 MIXTURES AT ONCE ====================
-            UInt32 idx_idx = dr::arange<UInt32>(4 * eta_block_size),
-                   idx = dr::tile(dr::arange<UInt32>(eta_block_size), 4);
+        const Float lerp_factors[4] = {
+            (1 - t_rem) * (1 - eta_rem),
+            (1 - t_rem) * eta_rem,
+            t_rem * (1 - eta_rem),
+            t_rem * eta_rem
+        };
 
-            Mask is_t_low = idx_idx < 2 * eta_block_size;
-            idx += t_block_size * dr::select(is_t_low, t_idx_low, t_idx_high);
+        // ==================== EXTRACT PARAMETERS AND APPLY LERP WEIGHT ====================
 
-            Mask is_eta_low = (idx_idx < eta_block_size) | ((idx_idx >= 2 * eta_block_size) & (idx_idx < 3 * eta_block_size));
-            idx += eta_block_size * dr::select(is_eta_low, eta_idx_low, eta_idx_high);
+        FloatStorage distrib_params = dr::zeros<FloatStorage>(4 * result_size);
+        UInt32Storage param_indices = dr::arange<UInt32Storage>(result_size);
+        for (ScalarUInt32 mixture_idx = 0; mixture_idx < 4; ++mixture_idx) {
 
-            // Extract parameters
-            distrib_params = dr::gather<FloatStorage>(tgmm_tables, idx);
+            // Gather gaussian weights and parameters
+            FloatStorage params = dr::gather<FloatStorage>(tgmm_tables, indices[mixture_idx] + param_indices);
 
-            // ==================== APPLY LERP FACTOR TO CORRESPONDING GAUSSIAN WEIGHTS ====================
-            Mask is_gaussian_weight = idx_idx % NB_GAUSSIAN_PARAMS == 4;
-            distrib_params *= dr::select(is_gaussian_weight & is_t_low, 1 - t_rem, 1);
-            distrib_params *= dr::select(is_gaussian_weight & !is_t_low, t_rem, 1);
-            distrib_params *= dr::select(is_gaussian_weight & is_eta_low, 1 - eta_rem, 1);
-            distrib_params *= dr::select(is_gaussian_weight & !is_eta_low, eta_rem, 1);
-
-            // =========================== EXTRACT MIS WEIGHTS FOR SAMPLING =========================
-            UInt32 weight_idx = 5 * dr::arange<UInt32>(4 * NB_GAUSSIAN_PARAMS) + 4;
-            mis_weights = dr::gather<FloatStorage>(distrib_params, weight_idx);
-
-        } else {
-
-            const UInt32 indices[4] = {
-                t_idx_low * t_block_size + eta_idx_low * eta_block_size,
-                t_idx_low * t_block_size + eta_idx_high * eta_block_size,
-                t_idx_high * t_block_size + eta_idx_low * eta_block_size,
-                t_idx_high * t_block_size + eta_idx_high * eta_block_size
-            };
-
-            const Float lerp_factors[4] = {
-                (1 - t_rem) * (1 - eta_rem),
-                (1 - t_rem) * eta_rem,
-                t_rem * (1 - eta_rem),
-                t_rem * eta_rem
-            };
-
-            // ==================== EXTRACT PARAMETERS AND APPLY LERP WEIGHT ====================
-            for (UInt32 mixture_idx = 0; mixture_idx < 4; ++mixture_idx) {
-                for (UInt32 param_idx = 0; param_idx < eta_block_size; ++param_idx) {
-
-                    UInt32 index = mixture_idx * eta_block_size + param_idx;
-                    Float value = tgmm_tables[indices[mixture_idx] + param_idx] *
-                                  (index % NB_GAUSSIAN_PARAMS) == 4 ? lerp_factors[mixture_idx] : 1;
-
-                    dr::scatter(distrib_params, value, index);
-                }
+            // Apply lerp factor to gaussian weights
+            //dr::scatter_reduce(ReduceOp::Mul, params, (FloatStorage)lerp_factors[mixture_idx], gaussian_weight_idx);
+            for (ScalarUInt32 weight_idx = 0; weight_idx < NB_GAUSSIAN; ++weight_idx) {
+                ScalarUInt32 gaussian_weight_idx = weight_idx * NB_GAUSSIAN_PARAMS + (NB_GAUSSIAN_PARAMS - 1);
+                dr::scatter(params, params[gaussian_weight_idx] * lerp_factors[mixture_idx], (UInt32)gaussian_weight_idx);
             }
 
-            // ============================= EXTRACT MIS WEIGHTS ================================
-            for (UInt32 gaussian_idx = 0; gaussian_idx < 4 * NB_GAUSSIAN; ++gaussian_idx)
-                dr::scatter(mis_weights, distrib_params[gaussian_idx * NB_GAUSSIAN_PARAMS + 4], gaussian_idx);
+            // Scatter back the parameters in the final gaussian mixture buffer
+            dr::scatter(distrib_params, params, mixture_idx * result_size + param_indices);
 
         }
 
+        UInt32Storage mis_weight_idx = NB_GAUSSIAN_PARAMS * dr::arange<UInt32Storage>(4 * NB_GAUSSIAN) + (NB_GAUSSIAN_PARAMS - 1);
+        FloatStorage mis_weights = dr::gather<FloatStorage>(distrib_params, mis_weight_idx);
 
         return std::make_pair(distrib_params, mis_weights);
     }
