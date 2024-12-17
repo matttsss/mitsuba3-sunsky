@@ -83,38 +83,16 @@ NAMESPACE_BEGIN(mitsuba)
     // ========================================== SKY MODEL ===========================================
     // ================================================================================================
 
-    template <typename Float>
-    DynamicBuffer<Float> bezier_interpolate(
-        const DynamicBuffer<Float>& dataset, const uint32_t out_size,
-        const uint32_t offset, const Float x) {
-
-        constexpr Float coefs[NB_SKY_CTRL_PTS] = {1, 5, 10, 10, 5, 1};
-
-        DynamicBuffer<Float> res = dr::zeros<DynamicBuffer<Float>>(out_size);
-        for (uint32_t ctrl_pt = 0; ctrl_pt < NB_SKY_CTRL_PTS; ++ctrl_pt) {
-
-            uint32_t index = offset + ctrl_pt * out_size;
-            Float coef = coefs[ctrl_pt] * dr::pow(1 - x, 5 - ctrl_pt) * dr::pow(x, ctrl_pt);
-
-            for (uint32_t j = 0; j < out_size; ++j)
-                //res[j] += coef * dataset[index + j];
-                dr::scatter_add(res, coef * dataset[index + j], j);
-        }
-
-        return res;
-    }
-
-
     template<typename Float>
     DynamicBuffer<Float> bezier_interpolate(
         const DynamicBuffer<Float>& dataset, const uint32_t out_size,
         const dr::uint32_array_t<Float>& offset, const Float& x) {
 
         using ScalarFloat = dr::value_t<Float>;
-        using UInt32 = dr::uint32_array_t<Float>;
         using FloatStorage = DynamicBuffer<Float>;
+        using UInt32Storage = DynamicBuffer<dr::uint32_array_t<Float>>;
 
-        UInt32 indices = offset + dr::arange<UInt32>(out_size);
+        UInt32Storage indices = offset + dr::arange<UInt32Storage>(out_size);
         constexpr ScalarFloat coefs[NB_SKY_CTRL_PTS] = {1, 5, 10, 10, 5, 1};
 
         FloatStorage res = dr::zeros<FloatStorage>(out_size);
@@ -133,7 +111,6 @@ NAMESPACE_BEGIN(mitsuba)
         const Albedo& albedo, Float turbidity, Float eta) {
 
         using UInt32 = dr::uint32_array_t<Float>;
-        using ScalarUInt32 = dr::value_t<UInt32>;
         using FloatStorage = DynamicBuffer<Float>;
 
         turbidity = dr::clip(turbidity, 1.f, NB_TURBIDITY);
@@ -159,26 +136,18 @@ NAMESPACE_BEGIN(mitsuba)
             t_low_a_high = bezier_interpolate(dataset, result_size, t_low * t_block_size + 1 * a_block_size, x),
             t_high_a_high = bezier_interpolate(dataset, result_size, t_high * t_block_size + 1 * a_block_size, x);
 
-        FloatStorage res; // TODO, is one better than the other?
+        FloatStorage albedo_storage = dr::load<FloatStorage>(albedo.data(), albedo.size());
+
+        FloatStorage res_a_low = dr::lerp(t_low_a_low, t_high_a_low, t_rem),
+                     res_a_high = dr::lerp(t_low_a_high, t_high_a_high, t_rem);
+
+        FloatStorage res;
         if constexpr (dr::is_array_v<Float>) {
-            FloatStorage albedo_storage = dr::load<FloatStorage>(albedo.data(), albedo.size());
-
-            FloatStorage res_a_low = dr::lerp(t_low_a_low, t_high_a_low, t_rem),
-                         res_a_high = dr::lerp(t_low_a_high, t_high_a_high, t_rem);
-
             res = dr::lerp(res_a_low, res_a_high, dr::repeat(albedo_storage, nb_params));
-
         } else {
-
             res = dr::zeros<FloatStorage>(result_size);
-            for (ScalarUInt32 i = 0; i < result_size; ++i) {
-                Float interpolated_coef = (1 - t_rem) * (1 - albedo[i/nb_params]) * t_low_a_low[i] +
-                                          (1 - t_rem) * albedo[i/nb_params]       * t_low_a_high[i] +
-                                          t_rem       * (1 - albedo[i/nb_params]) * t_high_a_low[i] +
-                                          t_rem       * albedo[i/nb_params]       * t_high_a_high[i];
-
-                dr::scatter(res, interpolated_coef, i);
-            }
+            for (UInt32 i = 0; i < result_size; ++i)
+                dr::scatter(res, dr::lerp(res_a_low[i], res_a_high[i], albedo[i/nb_params]), i);
         }
 
         return res;
