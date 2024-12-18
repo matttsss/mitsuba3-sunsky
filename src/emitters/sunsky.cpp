@@ -79,19 +79,11 @@ public:
         FloatStorage albedo = extract_albedo(m_albedo);
 
         // ================= GET ANGLES =================
-        Vector3f local_sun_dir = dr::normalize(
-            m_to_world.scalar().inverse()
-            .transform_affine(props.get<ScalarVector3f>("sun_direction")));
+        m_sun_dir = props.get<ScalarVector3f>("sun_direction");
+        dr::make_opaque(m_sun_dir);
 
-        Float sun_theta = dr::unit_angle_z(local_sun_dir),
-              sun_eta = 0.5f * dr::Pi<Float> - sun_theta;
-
-        m_sun_phi = dr::atan2(local_sun_dir.y(), local_sun_dir.x());
-        m_sun_phi = dr::select(m_sun_phi >= 0, m_sun_phi, m_sun_phi + dr::TwoPi<Float>);
-
-        m_local_sun_frame = Frame3f(local_sun_dir);
-
-        dr::make_opaque(m_sun_phi, m_local_sun_frame);
+        update_angles();
+        Float sun_eta = 0.5f * dr::Pi<Float> - m_sun_angles.y();
 
         // ================= GET SKY RADIANCE =================
         m_sky_dataset = array_from_file<Float64, Float>(DATABASE_PATH + DATASET_NAME + ".bin");
@@ -134,31 +126,6 @@ public:
         m_d65 = Texture::D65(1.f);
 
         m_flags = +EmitterFlags::Infinite | +EmitterFlags::SpatiallyVarying;
-    }
-
-    void traverse(TraversalCallback *callback) override {
-        Base::traverse(callback);
-        callback->put_parameter("turbidity", m_turbidity, +ParamFlags::Differentiable);
-        callback->put_parameter("sky_scale", m_sky_scale, +ParamFlags::NonDifferentiable);
-        callback->put_parameter("sun_scale", m_sun_scale, +ParamFlags::NonDifferentiable);
-        callback->put_parameter("albedo", m_albedo, +ParamFlags::NonDifferentiable);
-    }
-
-    void set_scene(const Scene *scene) override {
-        if (scene->bbox().valid()) {
-            ScalarBoundingSphere3f scene_sphere =
-                scene->bbox().bounding_sphere();
-            m_bsphere = BoundingSphere3f(scene_sphere.center, scene_sphere.radius);
-            m_bsphere.radius =
-                dr::maximum(math::RayEpsilon<Float>,
-                        m_bsphere.radius * (1.f + math::RayEpsilon<Float>));
-        } else {
-            m_bsphere.center = 0.f;
-            m_bsphere.radius = math::RayEpsilon<Float>;
-        }
-        m_surface_area = 4.f * dr::Pi<ScalarFloat> * dr::square(m_bsphere.radius);
-
-        dr::make_opaque(m_bsphere.center, m_bsphere.radius, m_surface_area);
     }
 
     Spectrum eval(const SurfaceInteraction3f &si, Mask active) const override {
@@ -267,6 +234,67 @@ public:
 
         return dr::select(active, combined_pdf, 0.f);
     }
+
+    void traverse(TraversalCallback *callback) override {
+        Base::traverse(callback);
+        callback->put_parameter("turbidity", m_turbidity, +ParamFlags::Differentiable);
+        callback->put_parameter("sun_direction", m_sun_dir, +ParamFlags::Differentiable);
+        callback->put_parameter("sky_scale", m_sky_scale, +ParamFlags::NonDifferentiable);
+        callback->put_parameter("sun_scale", m_sun_scale, +ParamFlags::NonDifferentiable);
+        callback->put_parameter("albedo", m_albedo, +ParamFlags::NonDifferentiable);
+    }
+
+    void parameters_changed(const std::vector<std::string> &keys) override {
+        const bool turbidity_changed = string::contains(keys, "turbidity");
+        const bool albedo_changed    = string::contains(keys, "albedo");
+        const bool sun_dir_changed   = string::contains(keys, "sun_direction");
+
+        m_turbidity = dr::clip(m_turbidity, 1.f, 10.f);
+        dr::make_opaque(m_turbidity);
+
+        FloatStorage albedo = extract_albedo(m_albedo);
+        update_angles();
+        Float eta = 0.5f * dr::Pi<Float> - m_sun_angles.y();
+
+        // Update sky
+        if (turbidity_changed || albedo_changed || sun_dir_changed) {
+            m_sky_params = compute_radiance_params<SKY_DATASET_SIZE>(m_sky_dataset, albedo, m_turbidity, eta);
+            m_sky_radiance = compute_radiance_params<SKY_DATASET_RAD_SIZE>(m_sky_rad_dataset, albedo, m_turbidity, eta);
+            dr::make_opaque(m_sky_params, m_sky_radiance);
+        }
+
+        // Update sun
+        if (turbidity_changed) {
+            m_sun_radiance = compute_sun_params<SUN_DATASET_SIZE>(m_sun_rad_dataset, m_turbidity);
+            dr::make_opaque(m_sun_radiance);
+        }
+
+        // Update TGMM
+        if (turbidity_changed || sun_dir_changed) {
+            const auto [gaussian_params, mis_weights] = compute_tgmm_distribution<TGMM_DATA_SIZE>(m_tgmm_tables, m_turbidity, eta);
+            m_gaussians = gaussian_params;
+            m_gaussian_distr = DiscreteDistribution<Float>(mis_weights);
+            dr::make_opaque(m_gaussians, m_gaussian_distr);
+        }
+    }
+
+    void set_scene(const Scene *scene) override {
+        if (scene->bbox().valid()) {
+            ScalarBoundingSphere3f scene_sphere =
+                scene->bbox().bounding_sphere();
+            m_bsphere = BoundingSphere3f(scene_sphere.center, scene_sphere.radius);
+            m_bsphere.radius =
+                dr::maximum(math::RayEpsilon<Float>,
+                        m_bsphere.radius * (1.f + math::RayEpsilon<Float>));
+        } else {
+            m_bsphere.center = 0.f;
+            m_bsphere.radius = math::RayEpsilon<Float>;
+        }
+        m_surface_area = 4.f * dr::Pi<ScalarFloat> * dr::square(m_bsphere.radius);
+
+        dr::make_opaque(m_bsphere.center, m_bsphere.radius, m_surface_area);
+    }
+
 
     /// This emitter does not occupy any particular region of space, return an invalid bounding box
     ScalarBoundingBox3f bbox() const override {
@@ -392,7 +420,7 @@ private:
         Point2f angles = dr::SqrtTwo<Float> * dr::erfinv(2 * sample - 1) * sigma + mu;
 
         // From fixed reference frame where sun_phi = pi/2 to local frame
-        angles.x() += m_sun_phi - 0.5f * dr::Pi<Float>;
+        angles.x() += m_sun_angles.x() - 0.5f * dr::Pi<Float>;
         // Clamp theta to avoid negative z-axis values (FP errors)
         angles.y() = dr::minimum(angles.y(), 0.5f * dr::Pi<Float> - dr::Epsilon<Float>);
 
@@ -408,7 +436,7 @@ private:
 
     Float tgmm_pdf(Point2f angles, Mask active) const {
         // From local frame to reference frame where sun_phi = pi/2 and phi is in [0, 2pi]
-        angles.x() -= m_sun_phi - 0.5f * dr::Pi<Float>;
+        angles.x() -= m_sun_angles.x() - 0.5f * dr::Pi<Float>;
         angles.x() = dr::select(angles.x() < 0, angles.x() + dr::TwoPi<Float>, angles.x());
 
         // Bounds check for theta
@@ -468,6 +496,21 @@ private:
         return albedo;
     }
 
+    void update_angles() {
+        Vector3f local_sun_dir = dr::normalize(
+            m_to_world.value().inverse().transform_affine(m_sun_dir));
+
+        Float sun_theta = dr::unit_angle_z(local_sun_dir);
+
+        Float sun_phi = dr::atan2(local_sun_dir.y(), local_sun_dir.x());
+              sun_phi = dr::select(sun_phi >= 0, sun_phi, sun_phi + dr::TwoPi<Float>);
+
+        m_sun_angles = Point2f(sun_phi, sun_theta);
+        m_local_sun_frame = Frame3f(local_sun_dir);
+
+        dr::make_opaque(m_sun_angles, m_local_sun_frame);
+    }
+
     // ================================================================================================
     // ========================================= ATTRIBUTES ===========================================
     // ================================================================================================
@@ -499,7 +542,8 @@ private:
     ref<Texture> m_albedo;
 
     // Sun parameters
-    Float m_sun_phi;
+    Vector3f m_sun_dir;
+    Point2f m_sun_angles;
     Frame3f m_local_sun_frame;
 
     // Radiance parameters
