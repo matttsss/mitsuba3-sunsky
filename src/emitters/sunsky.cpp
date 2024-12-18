@@ -58,7 +58,6 @@ public:
     using FloatStorage = DynamicBuffer<Float>;
 
     using Gaussian = dr::Array<Float, NB_GAUSSIAN_PARAMS>;
-    using Albedo = std::array<ScalarFloat, is_spectral_v<Spectrum> ? NB_WAVELENGTHS : 3>;
 
     using SpecUInt32 = dr::uint32_array_t<Spectrum>;
     using SpecMask = dr::mask_t<Spectrum>;
@@ -77,7 +76,7 @@ public:
 
         // ================= GET ALBEDO =================
         dr::eval(m_albedo);
-        Albedo albedo = extract_albedo(m_albedo);
+        FloatStorage albedo = extract_albedo(m_albedo);
 
         // ================= GET ANGLES =================
         Vector3f local_sun_dir = dr::normalize(
@@ -182,7 +181,7 @@ public:
             res *= MI_CIE_Y_NORMALIZATION;
 
         } else {
-            const Spectrum normalized_wavelengths = (si.wavelengths - WAVELENGTHS[0]) / WAVELENGTH_STEP;
+            const Spectrum normalized_wavelengths = (si.wavelengths - WAVELENGTHS<ScalarFloat>[0]) / WAVELENGTH_STEP;
 
             const SpecUInt32 query_idx_low = dr::floor2int<SpecUInt32>(normalized_wavelengths),
                              query_idx_high = dr::minimum(query_idx_low + 1, NB_CHANNELS - 1);
@@ -440,46 +439,27 @@ private:
         return dr::select(active, pdf, 0.0);
     }
 
-    Albedo extract_albedo(const ref<Texture>& albedo) const {
-        Albedo albedo_buff = {};
+    FloatStorage extract_albedo(const ref<Texture>& albedo_tex) const {
+        FloatStorage albedo = dr::zeros<FloatStorage>(NB_CHANNELS);
         SurfaceInteraction3f si = dr::zeros<SurfaceInteraction3f>();
-        if constexpr (!dr::is_array_v<Float> && is_rgb_v<Spectrum>) {
-            Color3f temp = albedo->eval(si);
-            for (size_t i = 0; i < NB_CHANNELS; ++i)
-                albedo_buff[i] = temp[i];
 
-        } else if constexpr (!dr::is_array_v<Float> && is_spectral_v<Spectrum>) {
-            for (size_t i = 0; i < NB_CHANNELS; ++i) {
-                si.wavelengths = WAVELENGTHS[i];
-                albedo_buff[i] = albedo->eval(si)[0];
-            }
-
-        } else if constexpr (is_rgb_v<Spectrum>) {
-            Color3f temp = albedo->eval(si);
-            for (size_t i = 0; i < NB_CHANNELS; ++i)
-                albedo_buff[i] = temp[i][0];
-
+        if constexpr (is_rgb_v<Spectrum>) {
+            // TODO find a way to load rgb buffer without loop
+            Color3f temp = albedo_tex->eval(si);
+            for (ScalarUInt32 i = 0; i < NB_CHANNELS; ++i)
+                dr::scatter(albedo, temp[i], (UInt32) i);
 
         } else if constexpr (is_spectral_v<Spectrum>) {
-            FloatStorage wavelengths = dr::load<FloatStorage>(WAVELENGTHS, NB_CHANNELS);
-            si.wavelengths = wavelengths;
-            Spectrum res = albedo->eval(si);
-
-            dr::eval(res);
-            Float&& temp = dr::migrate(res[0], AllocType::Host);
-            dr::sync_thread();
-
-            for (size_t i = 0; i < NB_CHANNELS; ++i)
-                albedo_buff[i] = temp[i];
+            si.wavelengths = dr::load<FloatStorage>(WAVELENGTHS<ScalarFloat>, NB_CHANNELS);
+            albedo = albedo_tex->eval(si)[0];
 
         } else {
             Throw("Unsupported spectrum type");
         }
 
-        for (size_t i = 0; i < NB_CHANNELS; ++i)
-            albedo_buff[i] = dr::clip(albedo_buff[i], 0.f, 1.f);
+        albedo = dr::clip(albedo, 0.f, 1.f);
 
-        return albedo_buff;
+        return albedo;
     }
 
     // ================================================================================================

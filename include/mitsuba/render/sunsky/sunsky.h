@@ -25,7 +25,8 @@ NAMESPACE_BEGIN(mitsuba)
     /// Distance between wavelengths in the skylight model
     static constexpr size_t WAVELENGTH_STEP = 40;
     /// Wavelengths used in the skylight model
-    static constexpr float WAVELENGTHS[NB_WAVELENGTHS] = {
+    template <typename Float>
+    static constexpr Float WAVELENGTHS[NB_WAVELENGTHS] = {
         320, 360, 400, 420, 460, 520, 560, 600, 640, 680, 720
     };
 
@@ -124,10 +125,10 @@ NAMESPACE_BEGIN(mitsuba)
      * @param eta Sun elevation angle
      * @return The interpolated dataset
      */
-    template <uint32_t dataset_size, typename Float, typename Albedo>
+    template <uint32_t dataset_size, typename Float>
     DynamicBuffer<Float> compute_radiance_params(
         const DynamicBuffer<Float>& dataset,
-        const Albedo& albedo, Float turbidity, Float eta) {
+        const DynamicBuffer<Float>& albedo, Float turbidity, Float eta) {
 
         using UInt32 = dr::uint32_array_t<Float>;
         using FloatStorage = DynamicBuffer<Float>;
@@ -158,8 +159,6 @@ NAMESPACE_BEGIN(mitsuba)
             t_low_a_high = bezier_interpolate(dataset, result_size, t_low * t_block_size + 1 * a_block_size, x),
             t_high_a_high = bezier_interpolate(dataset, result_size, t_high * t_block_size + 1 * a_block_size, x);
 
-        FloatStorage albedo_storage = dr::load<FloatStorage>(albedo.data(), albedo.size());
-
         // Interpolate on turbidity
         FloatStorage res_a_low = dr::lerp(t_low_a_low, t_high_a_low, t_rem),
                      res_a_high = dr::lerp(t_low_a_high, t_high_a_high, t_rem);
@@ -167,7 +166,7 @@ NAMESPACE_BEGIN(mitsuba)
         // Interpolate on albedo
         FloatStorage res;
         if constexpr (dr::is_array_v<Float>) {
-            res = dr::lerp(res_a_low, res_a_high, dr::repeat(albedo_storage, nb_params));
+            res = dr::lerp(res_a_low, res_a_high, dr::repeat(albedo, nb_params));
         } else {
             res = dr::zeros<FloatStorage>(result_size);
             for (UInt32 i = 0; i < result_size; ++i)
@@ -734,7 +733,7 @@ NAMESPACE_BEGIN(mitsuba)
 
                             // Convert from spectral to RGB
                             for (size_t lambda = 0; lambda < NB_WAVELENGTHS; ++lambda) {
-                                const double rectifier = (double) linear_rgb_rec(WAVELENGTHS[lambda])[rgb_idx];
+                                const double rectifier = linear_rgb_rec(WAVELENGTHS<double>[lambda])[rgb_idx];
 
                                 buffer[dst_idx] += rectifier * p_dataset_solar[lambda][sun_idx] *
                                                         p_dataset_ld[lambda][ld_param_idx];
