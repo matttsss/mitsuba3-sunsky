@@ -241,7 +241,7 @@ public:
         callback->put_parameter("sun_direction", m_sun_dir, +ParamFlags::Differentiable);
         callback->put_parameter("sky_scale", m_sky_scale, +ParamFlags::NonDifferentiable);
         callback->put_parameter("sun_scale", m_sun_scale, +ParamFlags::NonDifferentiable);
-        callback->put_parameter("albedo", m_albedo, +ParamFlags::NonDifferentiable);
+        callback->put_object("albedo", m_albedo.get(), +ParamFlags::NonDifferentiable);
     }
 
     void parameters_changed(const std::vector<std::string> &keys) override {
