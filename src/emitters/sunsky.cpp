@@ -449,9 +449,15 @@ private:
             for (ScalarUInt32 i = 0; i < NB_CHANNELS; ++i)
                 dr::scatter(albedo, temp[i], (UInt32) i);
 
-        } else if constexpr (is_spectral_v<Spectrum>) {
+        } else if constexpr (dr::is_array_v<Float> && is_spectral_v<Spectrum>) {
             si.wavelengths = dr::load<FloatStorage>(WAVELENGTHS<ScalarFloat>, NB_CHANNELS);
             albedo = albedo_tex->eval(si)[0];
+
+        } else if (!dr::is_array_v<Float> && is_spectral_v<Spectrum>) {
+            for (ScalarUInt32 i = 0; i < NB_CHANNELS; ++i) {
+                si.wavelengths = WAVELENGTHS<ScalarFloat>[i];
+                dr::scatter(albedo, albedo_tex->eval(si)[0], (UInt32) i);
+            }
 
         } else {
             Throw("Unsupported spectrum type");
