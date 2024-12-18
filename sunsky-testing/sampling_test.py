@@ -24,8 +24,8 @@ def test_sampling():
 
     sky = {
         "type": plugin_name,
-        "sunDirection": [cp_sun * st, sp_sun * st, ct],
-        "sunScale": 0.0,
+        "sun_direction": [cp_sun * st, sp_sun * st, ct],
+        "sun_scale": 0.0,
         "turbidity": t,
         "albedo": a
     }

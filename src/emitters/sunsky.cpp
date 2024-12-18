@@ -63,8 +63,8 @@ public:
     using SpecMask = dr::mask_t<Spectrum>;
 
     SunskyEmitter(const Properties &props) : Base(props) {
-        m_sun_scale = props.get<ScalarFloat>("sunScale", 1.f);
-        m_sky_scale = props.get<ScalarFloat>("skyScale", 1.f);
+        m_sun_scale = props.get<ScalarFloat>("sun_scale", 1.f);
+        m_sky_scale = props.get<ScalarFloat>("sky_scale", 1.f);
 
         m_turbidity = props.get<ScalarFloat>("turbidity", 3.f);
 
@@ -81,7 +81,7 @@ public:
         // ================= GET ANGLES =================
         Vector3f local_sun_dir = dr::normalize(
             m_to_world.scalar().inverse()
-            .transform_affine(props.get<ScalarVector3f>("sunDirection")));
+            .transform_affine(props.get<ScalarVector3f>("sun_direction")));
 
         Float sun_theta = dr::unit_angle_z(local_sun_dir),
               sun_eta = 0.5f * dr::Pi<Float> - sun_theta;

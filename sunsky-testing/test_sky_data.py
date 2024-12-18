@@ -111,8 +111,8 @@ def plot_pdf():
     # Compute coefficients
     sky = mi.load_dict({
         "type": plugin,
-        "sunDirection": [cp * st, sp * st, ct],
-        "sunScale": 0.0,
+        "sun_direction": [cp * st, sp * st, ct],
+        "sun_scale": 0.0,
         "turbidity": t,
         "albedo": a
     })
@@ -269,7 +269,7 @@ def test_render(render_shape, t, a, eta, wavelengths=None):
     # Compute coefficients
     sky = mi.load_dict({
         "type": plugin,
-        "sunDirection": [cp_sun * st, sp_sun * st, ct],
+        "sun_direction": [cp_sun * st, sp_sun * st, ct],
         "turbidity": t,
         "albedo": a
     })
