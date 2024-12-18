@@ -67,12 +67,11 @@ public:
         m_sky_scale = props.get<ScalarFloat>("sky_scale", 1.f);
 
         m_turbidity = props.get<ScalarFloat>("turbidity", 3.f);
+        dr::make_opaque(m_turbidity);
 
         m_albedo = props.texture<Texture>("albedo", 1.f);
         if (m_albedo->is_spatially_varying())
             Throw("Expected a non-spatially varying radiance spectra!");
-
-        dr::make_opaque(m_turbidity, m_albedo);
 
         // ================= GET ALBEDO =================
         dr::eval(m_albedo);
@@ -92,14 +91,10 @@ public:
         m_sky_params = compute_radiance_params<SKY_DATASET_SIZE>(m_sky_dataset, albedo, m_turbidity, sun_eta),
         m_sky_radiance = compute_radiance_params<SKY_DATASET_RAD_SIZE>(m_sky_rad_dataset, albedo, m_turbidity, sun_eta);
 
-        dr::make_opaque(m_sky_params, m_sky_radiance);
-
         // ================= GET SUN RADIANCE =================
         m_sun_rad_dataset = array_from_file<Float64, Float>(DATABASE_PATH + DATASET_NAME + "_solar.bin");
 
         m_sun_radiance = compute_sun_params<SUN_DATASET_SIZE>(m_sun_rad_dataset, m_turbidity);
-
-        dr::make_opaque(m_sun_radiance);
 
         // Only used in spectral mode since limb darkening is baked in the RGB dataset
         if constexpr (is_spectral_v<Spectrum>)
@@ -113,8 +108,6 @@ public:
 
         m_gaussians = distrib_params;
         m_gaussian_distr = DiscreteDistribution<Float>(mis_weights);
-
-        dr::make_opaque(m_gaussians, m_gaussian_distr);
 
         // ================= GENERAL PARAMETERS =================
 
@@ -260,21 +253,18 @@ public:
         if (turbidity_changed || albedo_changed || sun_dir_changed) {
             m_sky_params = compute_radiance_params<SKY_DATASET_SIZE>(m_sky_dataset, albedo, m_turbidity, eta);
             m_sky_radiance = compute_radiance_params<SKY_DATASET_RAD_SIZE>(m_sky_rad_dataset, albedo, m_turbidity, eta);
-            dr::make_opaque(m_sky_params, m_sky_radiance);
         }
 
         // Update sun
-        if (turbidity_changed) {
+        if (turbidity_changed)
             m_sun_radiance = compute_sun_params<SUN_DATASET_SIZE>(m_sun_rad_dataset, m_turbidity);
-            dr::make_opaque(m_sun_radiance);
-        }
+
 
         // Update TGMM
         if (turbidity_changed || sun_dir_changed) {
             const auto [gaussian_params, mis_weights] = compute_tgmm_distribution<TGMM_DATA_SIZE>(m_tgmm_tables, m_turbidity, eta);
             m_gaussians = gaussian_params;
             m_gaussian_distr = DiscreteDistribution<Float>(mis_weights);
-            dr::make_opaque(m_gaussians, m_gaussian_distr);
         }
     }
 
@@ -507,8 +497,6 @@ private:
 
         m_sun_angles = Point2f(sun_phi, sun_theta);
         m_local_sun_frame = Frame3f(local_sun_dir);
-
-        dr::make_opaque(m_sun_angles, m_local_sun_frame);
     }
 
     // ================================================================================================

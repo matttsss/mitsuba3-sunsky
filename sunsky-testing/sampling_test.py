@@ -4,7 +4,7 @@ sys.path.insert(0, "build/python")
 import drjit as dr
 import mitsuba as mi
 
-mi.set_variant("cuda_rgb")
+mi.set_variant("cuda_ad_rgb")
 
 from rendering.sunsky_plugin import SunskyEmitter
 

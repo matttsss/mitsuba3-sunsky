@@ -81,8 +81,8 @@ def test_chi2_emitter():
     # Compute coefficients
     sky = {
         "type": plugin,
-        "sunDirection": [cp_sun * st, sp_sun * st, ct],
-        "sunScale": 0.0,
+        "sun_direction": [cp_sun * st, sp_sun * st, ct],
+        "sun_scale": 0.0,
         "turbidity": t,
         "albedo": a
     }
@@ -94,7 +94,7 @@ def test_chi2_emitter():
         sample_func= sample_func,
         sample_dim=2,
         sample_count=1000000000,
-        res=300,
+        res=216,
         ires=32
     )
 

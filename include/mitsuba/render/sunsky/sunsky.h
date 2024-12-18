@@ -131,6 +131,7 @@ NAMESPACE_BEGIN(mitsuba)
         const DynamicBuffer<Float>& albedo, Float turbidity, Float eta) {
 
         using UInt32 = dr::uint32_array_t<Float>;
+        using UInt32Storage = DynamicBuffer<UInt32>;
         using FloatStorage = DynamicBuffer<Float>;
 
         // Clip parameters to valid ranges
@@ -164,16 +165,10 @@ NAMESPACE_BEGIN(mitsuba)
                      res_a_high = dr::lerp(t_low_a_high, t_high_a_high, t_rem);
 
         // Interpolate on albedo
-        FloatStorage res;
-        if constexpr (dr::is_array_v<Float>) {
-            res = dr::lerp(res_a_low, res_a_high, dr::repeat(albedo, nb_params));
-        } else {
-            res = dr::zeros<FloatStorage>(result_size);
-            for (UInt32 i = 0; i < result_size; ++i)
-                dr::scatter(res, dr::lerp(res_a_low[i], res_a_high[i], albedo[i/nb_params]), i);
-        }
+        UInt32Storage idx = dr::arange<UInt32Storage>(nb_params * albedo.size());
+        idx /= nb_params;
 
-        return res;
+        return dr::lerp(res_a_low, res_a_high, dr::gather<FloatStorage>(albedo, idx));
     }
 
 

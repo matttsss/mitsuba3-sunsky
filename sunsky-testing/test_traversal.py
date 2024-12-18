@@ -1,9 +1,11 @@
 import sys; sys.path.insert(0, "build/python")
 
+import matplotlib.pyplot as plt
+
 import drjit as dr
 import mitsuba as mi
 
-mi.set_variant("cuda_rgb")
+mi.set_variant("cuda_ad_rgb")
 
 
 def get_scene(t, a, eta, phi_sun):
@@ -54,7 +56,6 @@ if __name__ == "__main__":
     # Fetch the image gradient values
     grad_image = dr.grad(image)
 
-    import matplotlib.pyplot as plt
     plt.imshow(grad_image * 2.0)
     plt.axis('off')
     plt.show()
