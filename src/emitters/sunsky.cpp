@@ -243,7 +243,6 @@ public:
         const bool sun_dir_changed   = string::contains(keys, "sun_direction");
 
         m_turbidity = dr::clip(m_turbidity, 1.f, 10.f);
-        dr::make_opaque(m_turbidity);
 
         FloatStorage albedo = extract_albedo(m_albedo);
         update_angles();

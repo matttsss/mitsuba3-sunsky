@@ -135,7 +135,7 @@ NAMESPACE_BEGIN(mitsuba)
         using FloatStorage = DynamicBuffer<Float>;
 
         // Clip parameters to valid ranges
-        turbidity = dr::clip(turbidity, 1.f, NB_TURBIDITY);
+        turbidity = dr::clip(turbidity, 1.f, 10.f);
         eta = dr::clip(eta, 0.f, 0.5f * dr::Pi<Float>);
 
         Float x = dr::pow(2 * dr::InvPi<Float> * eta, 1.f/3.f);
@@ -221,7 +221,7 @@ NAMESPACE_BEGIN(mitsuba)
      * in "Solar energy", vol 27, number 5, 2001 by Pergamon Press.
      */
     template <typename Float>
-    Vector<dr::value_t<Float>, 3> compute_sun_coordinates(const DateTimeRecord<Float>& dateTime, const LocationRecord<Float>& location) {
+    Vector<Float, 3> compute_sun_coordinates(const DateTimeRecord<Float>& dateTime, const LocationRecord<Float>& location) {
         using Int32 = dr::int32_array_t<Float>;
 
         // Main variables
@@ -310,7 +310,7 @@ NAMESPACE_BEGIN(mitsuba)
             elevation += (EARTH_MEAN_RADIUS / ASTRONOMICAL_UNIT) * dr::sin(elevation);
         }
 
-        return from_spherical(Point<dr::value_t<Float>, 2>(azimuth, elevation));
+        return from_spherical(Point<Float, 2>(azimuth, elevation));
     }
 
     /**
