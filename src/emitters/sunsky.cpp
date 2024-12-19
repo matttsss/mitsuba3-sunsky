@@ -58,8 +58,7 @@ public:
 
     using Gaussian = dr::Array<Float, NB_GAUSSIAN_PARAMS>;
 
-    using SpecUInt32 = dr::uint32_array_t<Spectrum>;
-    using SpecMask = dr::mask_t<Spectrum>;
+    using FullSpectrum = mitsuba::Spectrum<Float, is_spectral_v<Spectrum> ? NB_WAVELENGTHS : 3>;
 
     SunskyEmitter(const Properties &props) : Base(props) {
         m_sun_scale = props.get<ScalarFloat>("sun_scale", 1.f);
@@ -123,6 +122,9 @@ public:
     Spectrum eval(const SurfaceInteraction3f &si, Mask active) const override {
         MI_MASKED_FUNCTION(ProfilerPhase::EndpointEvaluate, active);
 
+        using SpecMask = dr::mask_t<Spectrum>;
+        using SpecUInt32 = dr::uint32_array_t<Spectrum>;
+
         Vector3f local_wi = dr::normalize(m_to_world.value().inverse().transform_affine(si.wi));
         Float cos_theta = Frame3f::cos_theta(-local_wi),
               cos_gamma = Frame3f::cos_theta(m_local_sun_frame.to_local(-local_wi));
@@ -135,7 +137,7 @@ public:
             const SpecUInt32 idx = SpecUInt32({0, 1, 2});
 
             res = m_sky_scale * render_sky(idx, cos_theta, cos_gamma, active);
-            res += m_sun_scale * render_sun(idx, cos_theta, cos_gamma, active) * 465.382521163; // FIXME: explain this factor
+            res += m_sun_scale * render_sun<Spectrum>(idx, cos_theta, cos_gamma, active) * 465.382521163; // FIXME: explain this factor
 
             res *= MI_CIE_Y_NORMALIZATION;
 
@@ -155,8 +157,8 @@ public:
                 lerp_factor); // FIXME: explain this factor * 465.382521163
 
             res += m_sun_scale * dr::lerp(
-                render_sun(query_idx_low, cos_theta, cos_gamma, spec_mask),
-                render_sun(query_idx_high, cos_theta, cos_gamma, spec_mask),
+                render_sun<Spectrum>(query_idx_low, cos_theta, cos_gamma, spec_mask),
+                render_sun<Spectrum>(query_idx_high, cos_theta, cos_gamma, spec_mask),
                 lerp_factor);
 
             res *= m_d65->eval(si, active);
@@ -305,8 +307,11 @@ public:
     MI_DECLARE_CLASS()
 private:
 
-    Spectrum render_sky(const SpecUInt32& channel_idx,
-        const Float& cos_theta, const Float& cos_gamma, const SpecMask& active) const {
+
+    Spectrum render_sky(
+        const dr::uint32_array_t<Spectrum>& channel_idx,
+        const Float& cos_theta, const Float& cos_gamma,
+        const dr::mask_t<Spectrum>& active) const {
 
         // Gather coefficients for the skylight equation
         Spectrum coefs[NB_SKY_PARAMS];
@@ -323,7 +328,15 @@ private:
         return c1 * c2 * dr::gather<Spectrum>(m_sky_radiance, channel_idx, active);
     }
 
-    Spectrum render_sun(const SpecUInt32& channel_idx, const Float& cos_theta, const Float& cos_gamma, const SpecMask& active) const {
+    template <typename Spec>
+    Spec render_sun(
+        const dr::uint32_array_t<Spec>& channel_idx,
+        const Float& cos_theta, const Float& cos_gamma,
+        const dr::mask_t<Spec>& active) const {
+
+        using SpecMask = dr::mask_t<Spec>;
+        using SpecUInt32 = dr::uint32_array_t<Spec>;
+
         SpecMask hit_sun = active & (cos_gamma >= SUN_COS_CUTOFF);
 
         // Angles computation
@@ -339,20 +352,20 @@ private:
         const Float break_x = 0.5f * dr::Pi<Float> * dr::pow((Float)pos / NB_SUN_SEGMENTS, 3.f);
         const Float x = elevation - break_x;
 
-        UnpolarizedSpectrum solar_radiance = 0.f;
-        if constexpr (is_spectral_v<Spectrum>) {
+        Spec solar_radiance = 0.f;
+        if constexpr (is_spectral_v<Spec>) {
             // Compute sun radiance
-            UnpolarizedSpectrum sun_radiance = 0.f;
+            Spec sun_radiance = 0.f;
             SpecUInt32 global_idx = pos * NB_WAVELENGTHS * NB_SUN_CTRL_PTS + channel_idx * NB_SUN_CTRL_PTS;
             for (uint8_t k = 0; k < NB_SUN_CTRL_PTS; ++k)
-                sun_radiance += dr::pow(x, k) * dr::gather<Spectrum>(m_sun_radiance, global_idx + k, hit_sun);
+                sun_radiance += dr::pow(x, k) * dr::gather<Spec>(m_sun_radiance, global_idx + k, hit_sun);
 
 
             // Compute limb darkening
-            UnpolarizedSpectrum sun_ld = 0.f;
+            Spec sun_ld = 0.f;
             global_idx = channel_idx * NB_SUN_LD_PARAMS;
             for (uint8_t j = 0; j < NB_SUN_LD_PARAMS; ++j)
-                sun_ld += dr::pow(cos_phi, j) * dr::gather<Spectrum>(m_sun_ld, global_idx + j, hit_sun);
+                sun_ld += dr::pow(cos_phi, j) * dr::gather<Spec>(m_sun_ld, global_idx + j, hit_sun);
 
             solar_radiance = sun_ld * sun_radiance;
 
@@ -369,7 +382,7 @@ private:
 
                 Float cos_exp = 1.f;
                 for (uint8_t j = 0; j < NB_SUN_LD_PARAMS; ++j) {
-                    solar_radiance += x_exp * cos_exp * dr::gather<Spectrum>(m_sun_radiance, global_idx + k * NB_SUN_LD_PARAMS + j, hit_sun);
+                    solar_radiance += x_exp * cos_exp * dr::gather<Spec>(m_sun_radiance, global_idx + k * NB_SUN_LD_PARAMS + j, hit_sun);
                     cos_exp *= cos_phi;
                 }
 
@@ -378,16 +391,17 @@ private:
         }
 
         // TODO negative values clamping (current not working)
-        return dr::select(hit_sun & (solar_radiance > 0.f), solar_radiance, Spectrum(0.f));
+        return dr::select(hit_sun & (solar_radiance > 0.f), solar_radiance, Spec(0.f));
     }
 
     MI_INLINE Point2f gaussian_cdf(const Point2f& mu, const Point2f& sigma, const Point2f& x) const {
         return 0.5f * (1 + dr::erf(dr::InvSqrtTwo<Float> * (x - mu) / sigma));
     }
 
-    std::pair<Vector3f, Float> sample_sky(const Point2f& sample_, const Mask& active) const {
+
+    std::pair<Vector3f, Float> sample_sky(Point2f sample, const Mask& active) const {
         // Sample a gaussian from the mixture
-        const auto [idx, temp_sample] = m_gaussian_distr.sample_reuse(sample_.x(), active);
+        const auto [idx, temp_sample] = m_gaussian_distr.sample_reuse(sample.x(), active);
 
         // {mu_phi, mu_theta, sigma_phi, sigma_theta, weight}
         Gaussian gaussian = dr::gather<Gaussian>(m_gaussians, idx, active);
@@ -401,7 +415,7 @@ private:
         const Point2f cdf_a = gaussian_cdf(mu, sigma, a),
                       cdf_b = gaussian_cdf(mu, sigma, b);
 
-        Point2f sample = dr::lerp(cdf_a, cdf_b, Point2f{temp_sample, sample_.y()});
+        sample = dr::lerp(cdf_a, cdf_b, Point2f{temp_sample, sample.y()});
         // Clamp to erfinv's domain of definition
         sample = dr::clip(sample, dr::Epsilon<Float>, dr::OneMinusEpsilon<Float>);
 
