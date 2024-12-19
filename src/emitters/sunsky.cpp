@@ -16,16 +16,33 @@ Constant environment emitter (:monosp:`constant`)
 -------------------------------------------------
 
 .. pluginparameters::
-
- * - radiance
-   - |spectrum|
-   - Specifies the emitted radiance in units of power per unit area per unit steradian.
+ * - turbidity
+   - |float|
+   - Atmosphere turbidity (Default: 3, clear sky in a temperate climate).
    - |exposed|, |differentiable|
 
-This plugin implements a constant environment emitter, which surrounds
-the scene and radiates diffuse illumination towards it. This is often
-a good default light source when the goal is to visualize some loaded
-geometry that uses basic (e.g. diffuse) materials.
+ * - albedo
+   - |float| or |spectrum|
+   - Ground albedo (Default: 0.3).
+   - |exposed|
+
+ * - sun_direction
+   - |vector|
+   - Direction of the sun in the sky (No defaults).
+   - |exposed|, |differentiable|
+
+ * - sun_scale
+   - |float|
+   - Scale factor for the sun radiance (Default: 1).
+   - |exposed|
+
+ * - sky_scale
+   - |float|
+   - Scale factor for the sky radiance (Default: 1).
+   - |exposed|
+
+This plugin implements an environment emitter for the sun and sky dome.
+It is based on the Wilkie-Hosek sun and sky model.
 
 .. tabs::
     .. code-tab:: xml
@@ -307,7 +324,20 @@ public:
     MI_DECLARE_CLASS()
 private:
 
-
+    /**
+     * Renders the sky for the given channel indices and angles
+     *
+     * Based on the Hosek-Wilkie skylight model
+     * https://cgg.mff.cuni.cz/projects/SkylightModelling/HosekWilkie_SkylightModel_SIGGRAPH2012_Preprint_lowres.pdf
+     *
+     * @param channel_idx Indices of the channels to render
+     * @param cos_theta Cosine of the angle between the z-axis (up) and the
+     * viewing direction
+     * @param cos_gamma Cosine of the angle between the sun and the viewing
+     * direction
+     * @param active Mask for the active lanes and channel idx
+     * @return The rendered sky radiance
+     */
     Spectrum render_sky(
         const dr::uint32_array_t<Spectrum>& channel_idx,
         const Float& cos_theta, const Float& cos_gamma,
@@ -328,6 +358,21 @@ private:
         return c1 * c2 * dr::gather<Spectrum>(m_sky_radiance, channel_idx, active);
     }
 
+   /**
+    * Renders the sun for the given channel indices and angles
+    * The template parameter is used to render the full 11 wavelengths at once
+    * in pre-computations
+    *
+    * Based on the Hosek-Wilkie sun model
+    * https://cgg.mff.cuni.cz/publications/adding-a-solar-radiance-function-to-the-hosek-wilkie-skylight-model/
+    *
+    * @tparam Spec Spectral type to render (adapts the number of channels)
+    * @param channel_idx Indices of the channels to render
+    * @param cos_theta Cosine of the angle between the z-axis (up) and the viewing direction
+    * @param cos_gamma Cosine of the angle between the sun and the viewing direction
+    * @param active Mask for the active lanes and channel idx
+    * @return The rendered sun radiance
+    */
     template <typename Spec>
     Spec render_sun(
         const dr::uint32_array_t<Spec>& channel_idx,
@@ -399,6 +444,15 @@ private:
     }
 
 
+    /**
+     * Samples the sky from the truncated gaussian mixture with the given sample
+     * Based on the Truncated Gaussian Mixture Model (TGMM) for sky dome by N. Vitsas and K. Vardis
+     * https://diglib.eg.org/items/b3f1efca-1d13-44d0-ad60-741c4abe3d21
+     *
+     * @param sample Sample uniformly distributed in [0, 1]^2
+     * @param active Mask for the active lanes
+     * @return The sampled direction in the sky and its PDF
+     */
     std::pair<Vector3f, Float> sample_sky(Point2f sample, const Mask& active) const {
         // Sample a gaussian from the mixture
         const auto [idx, temp_sample] = m_gaussian_distr.sample_reuse(sample.x(), active);
