@@ -102,7 +102,7 @@ public:
 
 
         // ================= GET TGMM TABLES =================
-        m_tgmm_tables = array_from_file<Float, Float>(DATABASE_PATH "tgmm_tables.bin");
+        m_tgmm_tables = array_from_file<Float32, Float>(DATABASE_PATH "tgmm_tables.bin");
 
         const auto [distrib_params, mis_weights] = compute_tgmm_distribution<TGMM_DATA_SIZE>(m_tgmm_tables, m_turbidity, sun_eta);
 
