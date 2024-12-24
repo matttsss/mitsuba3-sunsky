@@ -318,7 +318,7 @@ def test_plot_spectral():
 
 
 if __name__ == "__main__":
-    mi.write_sun_sky_model_data("sunsky-testing/res/datasets/ssm_dataset")
+    mi.write_sun_sky_model_data("resources/sunsky/")
 
     #test_gmm_values()
     #test_get_tgmm_table()

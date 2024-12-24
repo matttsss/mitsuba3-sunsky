@@ -45,9 +45,8 @@ geometry that uses basic (e.g. diffuse) materials.
 
  */
 
-
-#define DATABASE_PREFIX "ssm_dataset"
-#define DATABASE_PATH "sunsky-testing/res/datasets/"
+#define DATABASE_PATH "resources/sunsky/"
+#define DATABASE_RENDER_ID std::string(is_spectral_v<Spectrum> ? "_spec_" : "_rgb_")
 
 template <typename Float, typename Spectrum>
 class SunskyEmitter final : public Emitter<Float, Spectrum> {
@@ -85,20 +84,20 @@ public:
         Float sun_eta = 0.5f * dr::Pi<Float> - m_sun_angles.y();
 
         // ================= GET SKY RADIANCE =================
-        m_sky_dataset = array_from_file<Float64, Float>(DATABASE_PATH + DATASET_NAME + ".bin");
-        m_sky_rad_dataset = array_from_file<Float64, Float>(DATABASE_PATH + DATASET_NAME + "_rad.bin");
+        m_sky_dataset = array_from_file<Float64, Float>(DATABASE_PATH "sky" + DATABASE_RENDER_ID + "params.bin");
+        m_sky_rad_dataset = array_from_file<Float64, Float>(DATABASE_PATH "sky" + DATABASE_RENDER_ID + "rad.bin");
 
         m_sky_params = compute_radiance_params<SKY_DATASET_SIZE>(m_sky_dataset, albedo, m_turbidity, sun_eta),
         m_sky_radiance = compute_radiance_params<SKY_DATASET_RAD_SIZE>(m_sky_rad_dataset, albedo, m_turbidity, sun_eta);
 
         // ================= GET SUN RADIANCE =================
-        m_sun_rad_dataset = array_from_file<Float64, Float>(DATABASE_PATH + DATASET_NAME + "_solar.bin");
+        m_sun_rad_dataset = array_from_file<Float64, Float>(DATABASE_PATH "sun" + DATABASE_RENDER_ID + "rad.bin");
 
         m_sun_radiance = compute_sun_params<SUN_DATASET_SIZE>(m_sun_rad_dataset, m_turbidity);
 
         // Only used in spectral mode since limb darkening is baked in the RGB dataset
         if constexpr (is_spectral_v<Spectrum>)
-            m_sun_ld = array_from_file<Float64, Float>(DATABASE_PATH DATABASE_PREFIX "_ld_sun.bin");
+            m_sun_ld = array_from_file<Float64, Float>(DATABASE_PATH "sun_spec_ld.bin");
 
 
         // ================= GET TGMM TABLES =================
@@ -501,10 +500,6 @@ private:
     // ================================================================================================
     // ========================================= ATTRIBUTES ===========================================
     // ================================================================================================
-
-    const std::string DATASET_NAME = is_spectral_v<Spectrum> ?
-            DATABASE_PREFIX "_spec" :
-            DATABASE_PREFIX "_rgb";
 
     /// Offset used to avoid division by zero in the pdf computation
     static constexpr ScalarFloat SIN_OFFSET = 0.00775;

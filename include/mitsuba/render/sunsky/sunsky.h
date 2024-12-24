@@ -810,15 +810,15 @@ NAMESPACE_BEGIN(mitsuba)
      *             The path should include the prefix of the filename
      */
     void write_sun_sky_model_data(const std::string &path) {
-        write_sky_data(path + "_spec.bin", f_spectral);
-        write_sky_data(path + "_spec_rad.bin", l_spectral);
-        write_sky_data(path + "_rgb.bin", f_RGB);
-        write_sky_data(path + "_rgb_rad.bin", l_RGB);
-        write_sky_data(path + "_xyz.bin", f_XYZ);
-        write_sky_data(path + "_xyz_rad.bin", l_XYZ);
-        write_sun_data_spectral(path + "_spec_solar.bin");
-        write_sun_data_rgb(path + "_rgb_solar.bin");
-        write_limb_darkening_data(path + "_ld_sun.bin");
+        write_sky_data(path + "sky_spec_params.bin", f_spectral);
+        write_sky_data(path + "sky_spec_rad.bin", l_spectral);
+        write_sky_data(path + "sky_rgb_params.bin", f_RGB);
+        write_sky_data(path + "sky_rgb_rad.bin", l_RGB);
+        write_sky_data(path + "sky_xyz_params.bin", f_XYZ);
+        write_sky_data(path + "sky_xyz_rad.bin", l_XYZ);
+        write_sun_data_spectral(path + "sun_spec_rad.bin");
+        write_sun_data_rgb(path + "sun_rgb_rad.bin");
+        write_limb_darkening_data(path + "sun_spec_ld.bin");
     }
 
 
