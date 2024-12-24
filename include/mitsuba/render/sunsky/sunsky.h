@@ -514,62 +514,6 @@ NAMESPACE_BEGIN(mitsuba)
         file.close();
     }
 
-    /**
-     * \brief Extracts a tensor from a compatible file
-     *
-     * @tparam FileType Type of the data stored in the file
-     * @tparam OutType The type of the data to return
-     * @param path Path of the data file
-     * @return The extracted tensor
-     */
-    template <typename FileType, typename OutType>
-    auto tensor_from_file(const std::string &path) {
-        using FloatStorage = DynamicBuffer<FileType>;
-        using FileStorage  = DynamicBuffer<OutType>;
-        using TensorXf     = dr::Tensor<FloatStorage>;
-
-        FileStream file(path, FileStream::EMode::ERead);
-
-        // =============== Read headers ===============
-        char text_buff[5] = "";
-        file.read(text_buff, 3);
-        if (strcmp(text_buff, "SKY") != 0 && strcmp(text_buff, "SUN") != 0)
-            Throw("OUPSSS wrong file");
-
-        // Read version
-        uint32_t version;
-        file.read(version);
-
-        // =============== Read tensor dimensions ===============
-        size_t nb_dims = 0;
-        file.read(nb_dims);
-
-        size_t nb_elements = 1;
-        size_t shape[nb_dims];
-        for (size_t dim = 0; dim < nb_dims; ++dim) {
-            file.read(shape[dim]);
-
-            if (!shape[dim])
-                Throw("Got dimension with 0 elements");
-
-            nb_elements *= shape[dim];
-        }
-
-        // ==================== Read data ====================
-        double* buffer = static_cast<double *>(
-            calloc(nb_elements, sizeof(double)));
-
-        file.read_array(buffer, nb_elements);
-
-        FileStorage data_d = dr::load<FileStorage>(buffer, nb_elements);
-        FloatStorage data_v = FloatStorage(data_d);
-
-        file.close();
-        free(buffer);
-
-        return TensorXf(data_v, nb_dims, shape);
-    }
-
 
     /*
      * This section contains the code that was used to generate the dataset files
