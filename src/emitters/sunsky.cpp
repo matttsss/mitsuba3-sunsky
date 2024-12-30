@@ -75,7 +75,7 @@ public:
 
     using Gaussian = dr::Array<Float, NB_GAUSSIAN_PARAMS>;
 
-    using FullSpectrum = mitsuba::Spectrum<Float, is_spectral_v<Spectrum> ? NB_WAVELENGTHS : 3>;
+    using FullSpectrum = std::conditional_t<is_spectral_v<Spectrum>, mitsuba::Spectrum<Float, NB_WAVELENGTHS>, Color3f>;
 
     SunskyEmitter(const Properties &props) : Base(props) {
         m_sun_scale = props.get<ScalarFloat>("sun_scale", 1.f);
@@ -132,6 +132,19 @@ public:
         m_surface_area = 4.f * dr::Pi<Float>;
 
         m_d65 = Texture::D65(1.f);
+
+        Float sky_lum = 0.f;
+        if constexpr (is_spectral_v<Spectrum>) {
+            const FloatStorage wavelengths = dr::load<FloatStorage>(WAVELENGTHS<ScalarFloat>, NB_WAVELENGTHS);
+            sky_lum = luminance(FullSpectrum(m_sky_radiance), wavelengths);
+        } else if (is_rgb_v<Spectrum>) {
+            sky_lum = luminance(Color3f(m_sky_radiance[0], m_sky_radiance[1], m_sky_radiance[2]));
+        } else {
+            Throw("Invalid render mode");
+        }
+        Float sun_lum = estimate_sun_luminance(500);
+        std::cout << "Sun luminance: " << sun_lum  << std::endl
+                  << "Sky luminance: " << sky_lum << std::endl;
 
         m_flags = +EmitterFlags::Infinite | +EmitterFlags::SpatiallyVarying;
     }
@@ -377,7 +390,7 @@ private:
     Spec render_sun(
         const dr::uint32_array_t<Spec>& channel_idx,
         const Float& cos_theta, const Float& cos_gamma,
-        const dr::mask_t<Spec>& active) const {
+        const dr::mask_t<Spec>& active = true) const {
 
         using SpecMask = dr::mask_t<Spec>;
         using SpecUInt32 = dr::uint32_array_t<Spec>;
@@ -563,6 +576,38 @@ private:
 
         m_sun_angles = Point2f(sun_phi, sun_theta);
         m_local_sun_frame = Frame3f(local_sun_dir);
+    }
+
+    Float estimate_sun_luminance(const ScalarUInt32 n) const {
+        using SpecUInt32 = dr::uint32_array_t<FullSpectrum>;
+
+        Float lum = 0.f;
+        SpecUInt32 render_idx = dr::arange<SpecUInt32>(n);
+
+        UInt32 i = 0;
+        dr::while_loop(
+            std::make_tuple(i),
+            [n](const UInt32& i) { return i < n; },
+            [&lum, render_idx, this](UInt32& i) {
+                const Point2f sample = {
+                    mitsuba::sample_tea_float<Float, UInt32>(i, 1),
+                    mitsuba::sample_tea_float<Float, UInt32>(i, 2)
+                };
+
+                const auto [dir, pdf] = sample_sun(sample);
+                FullSpectrum radiance = render_sun<FullSpectrum>(render_idx, Frame3f::cos_theta(dir), Frame3f::cos_theta(m_local_sun_frame.to_local(dir)));
+                if constexpr (is_spectral_v<Spectrum>) {
+                    const FloatStorage wavelengths = dr::load<FloatStorage>(WAVELENGTHS<ScalarFloat>, NB_WAVELENGTHS);
+                    lum += luminance(radiance, wavelengths) / pdf;
+                } else if (is_rgb_v<Spectrum>) {
+                    lum += luminance(radiance) / pdf;
+                }
+
+                i += 1;
+            }
+        );
+
+        return lum;
     }
 
     // ================================================================================================
