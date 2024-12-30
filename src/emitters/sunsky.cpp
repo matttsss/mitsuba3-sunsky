@@ -46,7 +46,7 @@ geometry that uses basic (e.g. diffuse) materials.
  */
 
 #define DATABASE_PATH "resources/sunsky/"
-#define DATABASE_RENDER_ID std::string(is_spectral_v<Spectrum> ? "_spec_" : "_rgb_")
+#define DATABASE_TYPE std::string(is_spectral_v<Spectrum> ? "_spec_" : "_rgb_")
 
 template <typename Float, typename Spectrum>
 class SunskyEmitter final : public Emitter<Float, Spectrum> {
@@ -84,14 +84,14 @@ public:
         Float sun_eta = 0.5f * dr::Pi<Float> - m_sun_angles.y();
 
         // ================= GET SKY RADIANCE =================
-        m_sky_dataset = array_from_file<Float64, Float>(DATABASE_PATH "sky" + DATABASE_RENDER_ID + "params.bin");
-        m_sky_rad_dataset = array_from_file<Float64, Float>(DATABASE_PATH "sky" + DATABASE_RENDER_ID + "rad.bin");
+        m_sky_dataset = array_from_file<Float64, Float>(DATABASE_PATH "sky" + DATABASE_TYPE + "params.bin");
+        m_sky_rad_dataset = array_from_file<Float64, Float>(DATABASE_PATH "sky" + DATABASE_TYPE + "rad.bin");
 
         m_sky_params = compute_radiance_params<SKY_DATASET_SIZE>(m_sky_dataset, albedo, m_turbidity, sun_eta),
         m_sky_radiance = compute_radiance_params<SKY_DATASET_RAD_SIZE>(m_sky_rad_dataset, albedo, m_turbidity, sun_eta);
 
         // ================= GET SUN RADIANCE =================
-        m_sun_rad_dataset = array_from_file<Float64, Float>(DATABASE_PATH "sun" + DATABASE_RENDER_ID + "rad.bin");
+        m_sun_rad_dataset = array_from_file<Float64, Float>(DATABASE_PATH "sun" + DATABASE_TYPE + "rad.bin");
 
         m_sun_radiance = compute_sun_params<SUN_DATASET_SIZE>(m_sun_rad_dataset, m_turbidity);
 

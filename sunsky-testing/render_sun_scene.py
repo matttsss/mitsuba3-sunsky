@@ -54,9 +54,9 @@ if __name__ == "__main__":
     dr.set_log_level(dr.LogLevel.Warn)
     mi.write_sun_sky_model_data("resources/sunsky/")
 
-    if mi.variant() == "cuda_rgb":
+    if mi.variant() == "cuda_ad_rgb":
         render_and_write_scene("test_sun_rgb")
-    elif mi.variant() == "cuda_spectral":
+    elif mi.variant() == "cuda_ad_spectral":
         render_and_write_scene("test_sun_spec")
     else:
         render_and_write_scene("test_sun_scalar")

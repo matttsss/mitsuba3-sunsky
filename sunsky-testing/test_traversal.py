@@ -40,26 +40,28 @@ def get_scene(t, a, eta, phi_sun):
     return mi.load_dict(scene)
 
 if __name__ == "__main__":
-    t, a, eta = 8, 0.0, dr.deg2rad(50)
+    t, a, eta = 9.5, 0.0, dr.deg2rad(50)
     phi_sun = -4*dr.pi/5
 
     scene = get_scene(t, a, eta, phi_sun)
     params = mi.traverse(scene)
 
-    key = 'emitter.sun_direction'
+    key = 'emitter.turbidity'
 
     # Finite differences
-    #d_t = 1e-7
-    #left_t = t - d_t
-    #right_t = t + d_t
-    #params[key] = left_t
-    #image_left = mi.render(scene, params, spp=128)
-    #params[key] = right_t
-    #image_right = mi.render(scene, params, spp=128)
-    #finite_diff = (image_right - image_left) / (right_t - left_t)
-#
-    #mi.util.write_bitmap("sunsky-testing/res/renders/finite_diff.png", finite_diff * 2.0)
-    #mi.util.write_bitmap("sunsky-testing/res/renders/finite_diff.exr", finite_diff * 2.0)
+    d_t = 1e-4
+    left_t = t - d_t
+    right_t = t + d_t
+    params[key] = left_t
+    image_left = mi.render(scene, params, spp=128)
+    params[key] = right_t
+    image_right = mi.render(scene, params, spp=128)
+    finite_diff = (image_right - image_left) / (right_t - left_t)
+
+    finite_diff = mi.Bitmap(finite_diff).convert(component_format=mi.Struct.Type.Float32)
+
+    mi.util.write_bitmap("sunsky-testing/res/renders/finite_diff.png", finite_diff)
+    mi.util.write_bitmap("sunsky-testing/res/renders/finite_diff.exr", finite_diff)
 
     # Use AD framework
     dr.enable_grad(params[key])
@@ -68,5 +70,7 @@ if __name__ == "__main__":
     dr.forward(params[key])
     grad_image = dr.grad(image)
 
-    mi.util.write_bitmap("sunsky-testing/res/renders/grad_image.png", grad_image * 2.0)
-    mi.util.write_bitmap("sunsky-testing/res/renders/grad_image.exr", grad_image * 2.0)
+    grad_image = mi.Bitmap(grad_image).convert(component_format=mi.Struct.Type.Float32)
+
+    mi.util.write_bitmap("sunsky-testing/res/renders/grad_image.png", grad_image)
+    mi.util.write_bitmap("sunsky-testing/res/renders/grad_image.exr", grad_image)
