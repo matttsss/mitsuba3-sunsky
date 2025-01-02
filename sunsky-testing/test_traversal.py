@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import drjit as dr
 import mitsuba as mi
 
-mi.set_variant("cuda_ad_rgb")
+mi.set_variant("cuda_ad_rgb_double")
 
 
 def get_scene(t, a, eta, phi_sun):
@@ -40,32 +40,41 @@ def get_scene(t, a, eta, phi_sun):
     return mi.load_dict(scene)
 
 if __name__ == "__main__":
-    t, a, eta = 9.5, 0.0, dr.deg2rad(50)
+    t, a, eta = 6, 0.5, dr.deg2rad(50)
     phi_sun = -4*dr.pi/5
 
     scene = get_scene(t, a, eta, phi_sun)
     params = mi.traverse(scene)
 
-    key = 'emitter.turbidity'
+    key = 'emitter.sun_direction'
 
     # Finite differences
-    d_t = 1e-4
-    left_t = t - d_t
-    right_t = t + d_t
-    params[key] = left_t
-    image_left = mi.render(scene, params, spp=128)
-    params[key] = right_t
-    image_right = mi.render(scene, params, spp=128)
-    finite_diff = (image_right - image_left) / (right_t - left_t)
+    if False:
+        d_v = 1e-6
+        value = params[key]
+        left_v = value - d_v
+        right_v = value + d_v
 
-    finite_diff = mi.Bitmap(finite_diff).convert(component_format=mi.Struct.Type.Float32)
+        params[key] = left_v
+        params.update()
+        image_left = mi.render(scene, params, spp=128)
 
-    mi.util.write_bitmap("sunsky-testing/res/renders/finite_diff.png", finite_diff)
-    mi.util.write_bitmap("sunsky-testing/res/renders/finite_diff.exr", finite_diff)
+        params[key] = right_v
+        params.update()
+        image_right = mi.render(scene, params, spp=128)
+
+        finite_diff = (image_right - image_left) / (right_v - left_v)
+
+        finite_diff = mi.Bitmap(finite_diff).convert(component_format=mi.Struct.Type.Float32)
+
+        mi.util.write_bitmap("sunsky-testing/res/renders/finite_diff.png", finite_diff)
+        mi.util.write_bitmap("sunsky-testing/res/renders/finite_diff.exr", finite_diff)
 
     # Use AD framework
     dr.enable_grad(params[key])
     params.update()
+    dr.graphviz_ad().view()
+
     image = mi.render(scene, params, spp=128)
     dr.forward(params[key])
     grad_image = dr.grad(image)
