@@ -88,6 +88,14 @@ public:
         if (m_albedo->is_spatially_varying())
             Throw("Expected a non-spatially varying radiance spectra!");
 
+        // Initialize the wavelengths if needed
+        if constexpr (is_spectral_v<Spectrum>)
+            c_wavelengths = FullSpectrum(
+               320.f, 360.f, 400.f, 420.f,
+               460.f, 520.f, 560.f, 600.f,
+               640.f, 680.f, 720.f
+            );
+
         // ================= GET ALBEDO =================
         dr::eval(m_albedo);
         FloatStorage albedo = extract_albedo(m_albedo);
@@ -135,14 +143,19 @@ public:
 
         Float sky_lum = 0.f;
         if constexpr (is_spectral_v<Spectrum>) {
-            const FloatStorage wavelengths = dr::load<FloatStorage>(WAVELENGTHS<ScalarFloat>, NB_WAVELENGTHS);
-            sky_lum = luminance(FullSpectrum(m_sky_radiance), wavelengths);
+            const FullSpectrum sky_rad = FullSpectrum(
+                m_sky_radiance[0], m_sky_radiance[1], m_sky_radiance[2], m_sky_radiance[3], m_sky_radiance[4],
+                m_sky_radiance[5], m_sky_radiance[6], m_sky_radiance[7], m_sky_radiance[8], m_sky_radiance[9],
+                m_sky_radiance[10]
+                );
+
+            sky_lum = luminance(sky_rad, c_wavelengths);
         } else if (is_rgb_v<Spectrum>) {
             sky_lum = luminance(Color3f(m_sky_radiance[0], m_sky_radiance[1], m_sky_radiance[2]));
         } else {
             Throw("Invalid render mode");
         }
-        Float sun_lum = estimate_sun_luminance(500);
+        Float sun_lum = estimate_sun_luminance(100000);
         std::cout << "Sun luminance: " << sun_lum  << std::endl
                   << "Sky luminance: " << sky_lum << std::endl;
 
@@ -172,7 +185,7 @@ public:
             res *= MI_CIE_Y_NORMALIZATION;
 
         } else {
-            const Spectrum normalized_wavelengths = (si.wavelengths - WAVELENGTHS<ScalarFloat>[0]) / WAVELENGTH_STEP;
+            const Spectrum normalized_wavelengths = (si.wavelengths - c_wavelengths[0]) / WAVELENGTH_STEP;
 
             const SpecUInt32 query_idx_low = dr::floor2int<SpecUInt32>(normalized_wavelengths),
                              query_idx_high = dr::minimum(query_idx_low + 1, NB_CHANNELS - 1);
@@ -580,25 +593,26 @@ private:
 
     Float estimate_sun_luminance(const ScalarUInt32 n) const {
         using SpecUInt32 = dr::uint32_array_t<FullSpectrum>;
-
-        Float lum = 0.f;
         SpecUInt32 render_idx = dr::arange<SpecUInt32>(n);
 
-        UInt32 i = 0;
-        dr::while_loop(
-            std::make_tuple(i),
-            [n](const UInt32& i) { return i < n; },
-            [&lum, render_idx, this](UInt32& i) {
+        UInt32 i_ = 0;
+        Float lum_ = 0.f;
+        std::tie(i_, lum_) = dr::while_loop(
+            std::make_tuple(i_, lum_),
+            [n](const UInt32& i, const Float&) { return i < n; },
+            [render_idx, this](UInt32& i, Float& lum) {
                 const Point2f sample = {
                     mitsuba::sample_tea_float<Float, UInt32>(i, 1),
                     mitsuba::sample_tea_float<Float, UInt32>(i, 2)
                 };
 
                 const auto [dir, pdf] = sample_sun(sample);
-                FullSpectrum radiance = render_sun<FullSpectrum>(render_idx, Frame3f::cos_theta(dir), Frame3f::cos_theta(m_local_sun_frame.to_local(dir)));
+                FullSpectrum radiance = render_sun<FullSpectrum>(render_idx,
+                    Frame3f::cos_theta(dir),
+                    Frame3f::cos_theta(m_local_sun_frame.to_local(dir)));
+
                 if constexpr (is_spectral_v<Spectrum>) {
-                    const FloatStorage wavelengths = dr::load<FloatStorage>(WAVELENGTHS<ScalarFloat>, NB_WAVELENGTHS);
-                    lum += luminance(radiance, wavelengths) / pdf;
+                    lum += luminance(radiance, c_wavelengths) / pdf;
                 } else if (is_rgb_v<Spectrum>) {
                     lum += luminance(radiance) / pdf;
                 }
@@ -607,7 +621,7 @@ private:
             }
         );
 
-        return lum;
+        return lum_ / n;
     }
 
     // ================================================================================================
@@ -624,6 +638,8 @@ private:
                               SKY_DATASET_RAD_SIZE = NB_TURBIDITY * NB_ALBEDO * NB_SKY_CTRL_PTS * NB_CHANNELS,
                               SUN_DATASET_SIZE = NB_TURBIDITY * NB_CHANNELS * NB_SUN_SEGMENTS * NB_SUN_CTRL_PTS * (is_spectral_v<Spectrum> ? 1 : NB_SUN_LD_PARAMS),
                               TGMM_DATA_SIZE = (NB_TURBIDITY - 1) * NB_ETAS * NB_GAUSSIAN * NB_GAUSSIAN_PARAMS;
+
+    FullSpectrum c_wavelengths;
 
     /// Cosine of the sun's cutoff angle
     const Float SUN_COS_CUTOFF = (Float) dr::cos(0.5 * SUN_APERTURE * dr::Pi<double> / 180.0);
