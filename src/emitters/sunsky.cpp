@@ -260,7 +260,8 @@ public:
         const bool albedo_changed    = string::contains(keys, "albedo");
         const bool sun_dir_changed   = string::contains(keys, "sun_direction");
 
-        m_turbidity = dr::clip(m_turbidity, 1.f, 10.f);
+        // Reassigns array and "destroys" the gradient flow
+        // m_turbidity = dr::clip(m_turbidity, 1.f, 10.f);
 
         FloatStorage albedo = extract_albedo(m_albedo);
         update_angles();
@@ -283,6 +284,11 @@ public:
             m_gaussians = gaussian_params;
             m_gaussian_distr = DiscreteDistribution<Float>(mis_weights);
         }
+
+        dr::set_label(m_sky_params, "sky_params");
+        dr::set_label(m_sky_radiance, "sky_radiance");
+        dr::set_label(m_sun_radiance, "sun_radiance");
+        dr::set_label(m_gaussians, "gaussian_params");
     }
 
     void set_scene(const Scene *scene) override {
@@ -315,7 +321,7 @@ public:
             << "  turbidity = " << string::indent(m_turbidity) << std::endl
             << "  sky_scale = " << string::indent(m_sky_scale) << std::endl
             << "  sun_scale = " << string::indent(m_sun_scale) << std::endl
-            << "  albedo = " << string::indent(m_albedo) << std::endl // TODO add `to_string`?
+            << "  albedo = " << string::indent(m_albedo) << std::endl
             << "]";
         return oss.str();
     }
@@ -476,7 +482,7 @@ private:
         Point2f angles = dr::SqrtTwo<Float> * dr::erfinv(2 * sample - 1) * sigma + mu;
 
         // From fixed reference frame where sun_phi = pi/2 to local frame
-        angles.x() += m_sun_angles.x();
+        angles.x() += m_sun_angles.x() - 0.5f * dr::Pi<Float>;
         // Clamp theta to avoid negative z-axis values (FP errors)
         angles.y() = dr::minimum(angles.y(), 0.5f * dr::Pi<Float> - dr::Epsilon<Float>);
 
@@ -492,7 +498,7 @@ private:
 
     Float tgmm_pdf(Point2f angles, Mask active) const {
         // From local frame to reference frame where sun_phi = pi/2 and phi is in [0, 2pi]
-        angles.x() -= m_sun_angles.x();
+        angles.x() -= m_sun_angles.x() - 0.5f * dr::Pi<Float>;
         angles.x() = dr::select(angles.x() < 0, angles.x() + dr::TwoPi<Float>, angles.x());
         angles.x() = dr::select(angles.x() > dr::TwoPi<Float>, angles.x() - dr::TwoPi<Float>, angles.x());
 

@@ -126,11 +126,11 @@ def diff_plugin(plugin, key):
 
     image = dr.reshape(mi.TensorXf, plugin.eval(si), (*render_shape, 3))
     dr.set_label(image, "image")
+
+    dr.forward_from(params[key], dr.ADFlag.ClearNone)
     dr.graphviz_ad().view()
 
-    dr.forward(params[key])
     grad_image = dr.grad(image)
-
     grad_image = mi.Bitmap(grad_image).convert(component_format=mi.Struct.Type.Float32)
 
     mi.util.write_bitmap("sunsky-testing/res/renders/grad_image.png", grad_image)
@@ -141,6 +141,6 @@ if __name__ == "__main__":
     t, a, eta = 6, 0.5, dr.deg2rad(50)
     phi_sun = -4*dr.pi/5
 
-    #diff_render(get_scene(t, a, eta, phi_sun), 'emitter.sun_direction')
+    #diff_render(get_scene(t, a, eta, phi_sun), 'emitter.turbidity')
     diff_plugin(get_emitter(t, a, eta, phi_sun), 'turbidity')
 
