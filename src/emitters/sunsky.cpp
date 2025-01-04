@@ -476,7 +476,7 @@ private:
         Point2f angles = dr::SqrtTwo<Float> * dr::erfinv(2 * sample - 1) * sigma + mu;
 
         // From fixed reference frame where sun_phi = pi/2 to local frame
-        angles.x() += m_sun_angles.x() - 0.5f * dr::Pi<Float>;
+        angles.x() += m_sun_angles.x();
         // Clamp theta to avoid negative z-axis values (FP errors)
         angles.y() = dr::minimum(angles.y(), 0.5f * dr::Pi<Float> - dr::Epsilon<Float>);
 
@@ -492,8 +492,9 @@ private:
 
     Float tgmm_pdf(Point2f angles, Mask active) const {
         // From local frame to reference frame where sun_phi = pi/2 and phi is in [0, 2pi]
-        angles.x() -= m_sun_angles.x() - 0.5f * dr::Pi<Float>;
+        angles.x() -= m_sun_angles.x();
         angles.x() = dr::select(angles.x() < 0, angles.x() + dr::TwoPi<Float>, angles.x());
+        angles.x() = dr::select(angles.x() > dr::TwoPi<Float>, angles.x() - dr::TwoPi<Float>, angles.x());
 
         // Bounds check for theta
         active &= (angles.y() >= 0.f) && (angles.y() <= 0.5f * dr::Pi<Float>);
@@ -519,7 +520,7 @@ private:
 
             pdf += m_gaussians[base_idx + 4] * gaussian_pdf / volume;
         }
-
+        //return dr::select(angles.x() < -dr::TwoPi<Float>, 1, 10) * dr::sin(angles.y());
         return dr::select(active, pdf, 0.0);
     }
 
@@ -556,12 +557,7 @@ private:
         Vector3f local_sun_dir = dr::normalize(
             m_to_world.value().inverse().transform_affine(m_sun_dir));
 
-        Float sun_theta = dr::unit_angle_z(local_sun_dir);
-
-        Float sun_phi = dr::atan2(local_sun_dir.y(), local_sun_dir.x());
-              sun_phi = dr::select(sun_phi >= 0, sun_phi, sun_phi + dr::TwoPi<Float>);
-
-        m_sun_angles = Point2f(sun_phi, sun_theta);
+        m_sun_angles = from_spherical(local_sun_dir);
         m_local_sun_frame = Frame3f(local_sun_dir);
     }
 
