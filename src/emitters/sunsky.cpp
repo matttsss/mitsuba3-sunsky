@@ -526,7 +526,6 @@ private:
 
             pdf += m_gaussians[base_idx + 4] * gaussian_pdf / volume;
         }
-        //return dr::select(angles.x() < -dr::TwoPi<Float>, 1, 10) * dr::sin(angles.y());
         return dr::select(active, pdf, 0.0);
     }
 
@@ -572,7 +571,7 @@ private:
     // ================================================================================================
 
     /// Offset used to avoid division by zero in the pdf computation
-    static constexpr ScalarFloat SIN_OFFSET = 0.00775;
+    static constexpr ScalarFloat SIN_OFFSET = dr::Epsilon<Float>; // chi2 passes with 0.00775
     /// Number of channels used in the skylight model
     static constexpr uint32_t NB_CHANNELS = is_spectral_v<Spectrum> ? NB_WAVELENGTHS : 3;
 

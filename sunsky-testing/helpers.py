@@ -12,10 +12,10 @@ def from_spherical(v: mi.Vector3f) -> mi.Vector2f:
     return mi.Vector2f(dr.atan2(v[1], v[0]), dr.safe_acos(v[2]))
 
 
-def get_north_hemisphere_rays(resolution, ret_angles = False):
+def get_north_hemisphere_rays(resolution, ret_angles = False, eps = 0):
     phi, thetas = dr.meshgrid(
         dr.linspace(mi.Float, 0, dr.two_pi, resolution[1]),
-        dr.linspace(mi.Float, 0, dr.pi/2, resolution[0])
+        dr.linspace(mi.Float, 0 + eps, dr.pi/2 - eps, resolution[0])
     )
 
     if ret_angles:
