@@ -27,7 +27,7 @@ NAMESPACE_BEGIN(mitsuba)
     /// Wavelengths used in the skylight model
     template <typename Float>
     static constexpr Float WAVELENGTHS[NB_WAVELENGTHS] = {
-        320, 360, 400, 420, 460, 520, 560, 600, 640, 680, 720
+        320, 360, 400, 440, 480, 520, 560, 600, 640, 680, 720
     };
 
     /// Number of control points for interpolation in the skylight model
@@ -144,6 +144,7 @@ NAMESPACE_BEGIN(mitsuba)
                t_low = dr::maximum(t_int - 1, 0),
                t_high = dr::minimum(t_low + 1, NB_TURBIDITY - 1);
 
+        // TODO gradient breaks here
         Float t_rem = turbidity - t_int;
 
         // Compute block sizes for each parameter to facilitate indexing
