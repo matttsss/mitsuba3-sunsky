@@ -154,7 +154,7 @@ public:
             const SpecUInt32 idx = SpecUInt32({0, 1, 2});
 
             res = m_sky_scale * render_sky(idx, cos_theta, cos_gamma, active);
-            res += m_sun_scale * render_sun<Spectrum>(idx, cos_theta, cos_gamma, active) * 465.382521163; // FIXME: explain this factor
+            res += m_sun_scale * render_sun<Spectrum>(idx, cos_theta, cos_gamma, active) * 467.069280386; // FIXME: explain this factor
 
             res *= MI_CIE_Y_NORMALIZATION;
 

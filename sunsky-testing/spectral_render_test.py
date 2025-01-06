@@ -30,7 +30,7 @@ def test_spectral_constants():
         max_lum = dr.max(lum)
 
         # Load reference RGB image
-        path = f"../renders/sky_rgb_eta{eta:.3f}_t{turb:.3f}_a{albedo:.3f}.exr"
+        path = f"../renders/rgb/sky_rgb_eta{eta:.3f}_t{turb:.3f}_a{albedo:.3f}.exr"
         ref_image = mi.TensorXf(mi.Bitmap(path))
         ref_lum = ref_image[::, ::, 0] * 0.212671 + ref_image[::, ::, 1] * 0.715160 + ref_image[::, ::, 2] * 0.072169
         ref_max_lum = dr.max(ref_lum)
@@ -116,7 +116,7 @@ def test_comp_black_body():
 
 
 if __name__ == "__main__":
-    mi.set_variant("cuda_ad_rgb")
-    #test_spectral_constants()
+    mi.set_variant("cuda_ad_spectral")
+    test_spectral_constants()
     #test_comp_black_body()
-    test_spectral_conversion()
+    #test_spectral_conversion()
