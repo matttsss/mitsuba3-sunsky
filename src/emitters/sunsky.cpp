@@ -181,7 +181,7 @@ public:
             res *= m_d65->eval(si, active);
         }
 
-        return dr::select(active & (res >= 0.f), res, 0.f);
+        return res & active;
     }
 
 
@@ -262,6 +262,7 @@ public:
 
         // Reassigns array and "destroys" the gradient flow
         // m_turbidity = dr::clip(m_turbidity, 1.f, 10.f);
+        dr::set_label(m_turbidity, "turbidity");
 
         FloatStorage albedo = extract_albedo(m_albedo);
         update_angles();
@@ -441,8 +442,7 @@ private:
             }
         }
 
-        // TODO negative values clamping (current not working)
-        return dr::select(hit_sun & (solar_radiance > 0.f), solar_radiance, Spec(0.f));
+        return solar_radiance & hit_sun;
     }
 
     MI_INLINE Point2f gaussian_cdf(const Point2f& mu, const Point2f& sigma, const Point2f& x) const {
@@ -526,7 +526,7 @@ private:
 
             pdf += m_gaussians[base_idx + 4] * gaussian_pdf / volume;
         }
-        return dr::select(active, pdf, 0.0);
+        return dr::select(active, pdf, 0.f);
     }
 
     FloatStorage extract_albedo(const ref<Texture>& albedo_tex) const {

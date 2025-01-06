@@ -124,17 +124,19 @@ def diff_plugin(plugin, key):
     dr.enable_grad(params[key])
     params.update()
 
-    image = dr.reshape(mi.TensorXf, plugin.eval(si), (*render_shape, 3))
+    image = dr.reshape(mi.TensorXf, plugin.eval(si), (*render_shape, 3)) if dr.hint(mi.is_rgb, mode="scalar") else plugin.eval(si)
     dr.set_label(image, "image")
 
     dr.forward_from(params[key], dr.ADFlag.ClearNone)
     dr.graphviz_ad().view()
 
     grad_image = dr.grad(image)
-    grad_image = mi.Bitmap(grad_image).convert(component_format=mi.Struct.Type.Float32)
 
-    mi.util.write_bitmap("sunsky-testing/res/renders/grad_image.png", grad_image)
-    mi.util.write_bitmap("sunsky-testing/res/renders/grad_image.exr", grad_image)
+    if dr.hint(mi.is_rgb, mode="scalar"):
+        grad_image = mi.Bitmap(grad_image).convert(component_format=mi.Struct.Type.Float32)
+
+        mi.util.write_bitmap("sunsky-testing/res/renders/grad_image.png", grad_image)
+        mi.util.write_bitmap("sunsky-testing/res/renders/grad_image.exr", grad_image)
 
 
 if __name__ == "__main__":

@@ -7,9 +7,6 @@ sys.path.insert(0, "build/python")
 import drjit as dr
 import mitsuba as mi
 
-mi.set_variant("cuda_spectral")
-
-from helpers import get_north_hemisphere_rays
 from render_sky_scene import render_scene
 
 
@@ -55,7 +52,71 @@ def test_spectral_constants():
     std_dev = dr.sqrt(dr.sum((ratios - dr.mean(ratios))**2) / (len(ratios) - 1))
     dr.print("Standard deviation: {std}", std=std_dev)
 
+def test_spectral_conversion():
+    t, a = 3.2, 0.0
+    eta = dr.deg2rad(48.2)
+    phi_sun = -4*dr.pi/5
+
+    sp, cp = dr.sincos(phi_sun)
+    st, ct = dr.sincos(dr.pi/2 - eta)
+    plugin = mi.load_dict({
+        'type': 'sunsky',
+        'sun_direction': [cp * st, sp * st, ct],
+        'sun_scale': 0.0,
+        'turbidity': t,
+        'albedo': a,
+    })
+
+    si = dr.zeros(mi.SurfaceInteraction3f)
+    if dr.hint(mi.is_spectral, mode="scalar"):
+        si.wavelengths = dr.arange(mi.Float, 320, 760, 40)
+    si.wi = -mi.Vector3f(cp * st, sp * st, ct)
+
+    res = plugin.eval(si)
+
+    if dr.hint(mi.is_spectral, mode="scalar"):
+        res = dr.mean(mi.spectrum_to_srgb(res, si.wavelengths), axis=1)
+        dr.print(res)
+
+        lum = mi.luminance(res)
+        dr.print(lum)
+    else:
+        lum = mi.luminance(res)
+        dr.print(lum)
+
+def test_comp_black_body():
+    t, a = 1, 0.0
+    eta = dr.deg2rad(89.5)
+    phi_sun = -4*dr.pi/5
+
+    sp, cp = dr.sincos(phi_sun)
+    st, ct = dr.sincos(dr.pi/2 - eta)
+    plugin = mi.load_dict({
+        'type': 'sunsky',
+        'sun_direction': [cp * st, sp * st, ct],
+        'turbidity': t,
+        'albedo': a,
+    })
+
+    blackbody = mi.load_dict({
+        'type': 'blackbody',
+        'temperature': 5778,
+    })
+
+    si = dr.zeros(mi.SurfaceInteraction3f)
+    if dr.hint(mi.is_spectral, mode="scalar"):
+        si.wavelengths = dr.arange(mi.Float, 320, 760, 40)
+    si.wi = -mi.Vector3f(cp * st, sp * st, ct)
+
+    sunsky_res = plugin.eval(si)
+    blackbody_res = blackbody.eval(si)
+
+    dr.print("Sunsky luminance: {lum}", lum=dr.mean(mi.luminance(sunsky_res, si.wavelengths)))
+    dr.print("Blackbody luminance: {lum}", lum=dr.mean(mi.luminance(blackbody_res, si.wavelengths)))
+
 
 if __name__ == "__main__":
-    test_spectral_constants()
-
+    mi.set_variant("cuda_ad_rgb")
+    #test_spectral_constants()
+    #test_comp_black_body()
+    test_spectral_conversion()
