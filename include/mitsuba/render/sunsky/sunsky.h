@@ -329,17 +329,17 @@ NAMESPACE_BEGIN(mitsuba)
         using UInt32Storage = DynamicBuffer<dr::uint32_array_t<Float>>;
         using FloatStorage = DynamicBuffer<Float>;
 
-        turbidity = dr::clip(turbidity, 1.f, 10.f);
-        UInt32 t_int = dr::floor2int<UInt32>(turbidity),
-               t_low = dr::maximum(t_int - 1, 0),
-               t_high = dr::minimum(t_low + 1, NB_TURBIDITY - 1);
+        turbidity = dr::clip(turbidity - 1, 0.f, 9.f);
+        UInt32 t_low = dr::floor2int<UInt32>(turbidity),
+               t_high = t_low + 1;
+        Float  t_rem = turbidity - t_low;
 
         constexpr uint32_t t_block_size = dataset_size / NB_TURBIDITY;
 
         UInt32Storage idx = dr::arange<UInt32Storage>(t_block_size);
-        return dr::lerp(dr::gather<FloatStorage>(sun_radiance_dataset, t_low * t_block_size + idx),
-                        dr::gather<FloatStorage>(sun_radiance_dataset, t_high * t_block_size + idx),
-                        turbidity - t_int);
+        return dr::lerp(dr::gather<FloatStorage>(sun_radiance_dataset, t_low * t_block_size + idx, t_low < NB_TURBIDITY - 1),
+                        dr::gather<FloatStorage>(sun_radiance_dataset, t_high * t_block_size + idx, t_high < NB_TURBIDITY - 1),
+                        t_rem);
     }
 
     // ================================================================================================

@@ -432,17 +432,11 @@ private:
             SpecUInt32 global_idx = pos * (3 * NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS) +
                                     channel_idx * (NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS);
 
-            // TODO use dr::pow ?
-            Float x_exp = 1.f;
             for (uint8_t k = 0; k < NB_SUN_CTRL_PTS; ++k) {
-
-                Float cos_exp = 1.f;
                 for (uint8_t j = 0; j < NB_SUN_LD_PARAMS; ++j) {
-                    solar_radiance += x_exp * cos_exp * dr::gather<Spec>(m_sun_radiance, global_idx + k * NB_SUN_LD_PARAMS + j, hit_sun);
-                    cos_exp *= cos_phi;
+                    solar_radiance += dr::pow(x, k) * dr::pow(cos_phi, j) *
+                                      dr::gather<Spec>(m_sun_radiance, global_idx + k * NB_SUN_LD_PARAMS + j, hit_sun);
                 }
-
-                x_exp *= x;
             }
         }
 
