@@ -115,8 +115,99 @@ def test_comp_black_body():
     dr.print("Blackbody luminance: {lum}", lum=dr.mean(mi.luminance(blackbody_res, si.wavelengths)))
 
 
+def test_spec_film():
+    from rendering.spherical_sensor import SphericalSensor
+
+    t, a = 1, 0.0
+    eta = dr.deg2rad(0)
+    phi_sun = -4*dr.pi/5
+
+    sp, cp = dr.sincos(phi_sun)
+    st, ct = dr.sincos(dr.pi/2 - eta)
+    film = {
+        'type': 'specfilm',
+        'width': 1024,
+        'height': 512,
+    }
+
+    start, end = 360, 830
+    step = (end - start) / 10
+    lbda = start - step/2
+    for i in range(10):
+        lbda += step
+        film[f'band_{i:02d}'] = {
+            'type': 'regular',
+            'wavelength_min': lbda,
+            'wavelength_max': lbda + 0.5,
+            'values': '0.999, 0.001'
+        }
+    scene = mi.load_dict({
+        'type': 'scene',
+        'integrator': {
+            'type': 'direct'
+        },
+        'sensor': {
+            'type': 'spherical',
+            'sampler': {
+                'type': 'independent'
+            },
+            'film': film
+        },
+        'emitter': {
+            'type': 'sunsky',
+            'sun_direction': [cp * st, sp * st, ct],
+            'sun_scale': 0.0,
+            'sky_scale': 1.0,
+            'turbidity': t,
+            'albedo': a,
+        }
+    })
+
+    image = mi.Bitmap(mi.render(scene, spp=8000), pixel_format=mi.Bitmap.PixelFormat.MultiChannel)
+    mi.util.write_bitmap("sunsky-testing/res/renders/full_channels.exr", image)
+
+def test_full_eval():
+    from helpers import get_spherical_rays
+
+    t, a = 2.5, 0.0
+    eta = dr.deg2rad(0)
+    phi_sun = -4*dr.pi/5
+
+    sp, cp = dr.sincos(phi_sun)
+    st, ct = dr.sincos(dr.pi/2 - eta)
+    plugin = mi.load_dict({
+        'type': 'sunsky',
+        'sun_direction': [cp * st, sp * st, ct],
+        'sun_scale': 0.0,
+        'sky_scale': 1.0,
+        'turbidity': t,
+        'albedo': a,
+    })
+
+    render_res = (512, 1024)
+    si = dr.zeros(mi.SurfaceInteraction3f)
+    si.wi = -get_spherical_rays(render_res)
+
+    start, end = 360, 830
+    step = (end - start) / 10
+    lbda = start - step/2
+
+    output_image = dr.zeros(mi.Float, render_res[0] * render_res[1] * 10)
+    for i in range(10):
+        lbda += step
+        si.wavelengths = lbda
+        res = plugin.eval(si)[0]
+        dr.scatter(output_image, res, i + 10 * dr.arange(mi.UInt32, render_res[0] * render_res[1]))
+
+    output_image = mi.TensorXf(output_image, (*render_res, 10))
+
+    mi.util.write_bitmap("sunsky-testing/res/renders/full_channels.exr", output_image)
+
 if __name__ == "__main__":
     mi.set_variant("cuda_ad_spectral")
-    test_spectral_constants()
+    #test_spectral_constants()
     #test_comp_black_body()
     #test_spectral_conversion()
+
+    #test_spec_film()
+    test_full_eval()

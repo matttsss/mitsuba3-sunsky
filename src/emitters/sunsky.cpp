@@ -131,15 +131,12 @@ public:
         m_bsphere = BoundingSphere3f(ScalarPoint3f(0.f), 1.f);
         m_surface_area = 4.f * dr::Pi<Float>;
 
-        m_d65 = Texture::D65(1.f);
-
         m_flags = +EmitterFlags::Infinite | +EmitterFlags::SpatiallyVarying;
     }
 
     Spectrum eval(const SurfaceInteraction3f &si, Mask active) const override {
         MI_MASKED_FUNCTION(ProfilerPhase::EndpointEvaluate, active);
 
-        using SpecMask = dr::mask_t<Spectrum>;
         using SpecUInt32 = dr::uint32_array_t<Spectrum>;
 
         Vector3f local_wi = dr::normalize(m_to_world.value().inverse().transform_affine(si.wi));
@@ -161,24 +158,21 @@ public:
         } else {
             const Spectrum normalized_wavelengths = (si.wavelengths - WAVELENGTHS<ScalarFloat>[0]) / WAVELENGTH_STEP;
 
-            const SpecUInt32 query_idx_low = dr::floor2int<SpecUInt32>(normalized_wavelengths),
-                             query_idx_high = dr::minimum(query_idx_low + 1, NB_CHANNELS - 1);
+            const SpecUInt32 query_idx_low  = dr::floor2int<SpecUInt32>(normalized_wavelengths),
+                             query_idx_high = query_idx_low + 1;
 
             const Spectrum lerp_factor = normalized_wavelengths - query_idx_low;
 
-            SpecMask spec_mask = active & (query_idx_low >= 0) & (query_idx_low < NB_CHANNELS);
-
             res = m_sky_scale * dr::lerp(
-                render_sky(query_idx_low, cos_theta, cos_gamma, spec_mask),
-                render_sky(query_idx_high, cos_theta, cos_gamma, spec_mask),
-                lerp_factor); // FIXME: explain this factor * 465.382521163
-
-            res += m_sun_scale * dr::lerp(
-                render_sun<Spectrum>(query_idx_low, cos_theta, cos_gamma, spec_mask),
-                render_sun<Spectrum>(query_idx_high, cos_theta, cos_gamma, spec_mask),
+                render_sky(query_idx_low, cos_theta, cos_gamma, active & (query_idx_low < NB_CHANNELS)),
+                render_sky(query_idx_high, cos_theta, cos_gamma, active & (query_idx_high < NB_CHANNELS)),
                 lerp_factor);
 
-            res *= m_d65->eval(si, active);
+            res += m_sun_scale * dr::lerp(
+                render_sun<Spectrum>(query_idx_low, cos_theta, cos_gamma, active & (query_idx_low < NB_CHANNELS)),
+                render_sun<Spectrum>(query_idx_high, cos_theta, cos_gamma, active & (query_idx_high < NB_CHANNELS)),
+                lerp_factor);
+
         }
 
         return res & active;
@@ -605,8 +599,6 @@ private:
     // Sampling parameters
     FloatStorage m_gaussians;
     DiscreteDistribution<Float> m_gaussian_distr;
-
-    ref<Texture> m_d65;
 
     // Permanent datasets loaded from files/memory
     FloatStorage m_sky_dataset;
