@@ -138,8 +138,8 @@ def test_spec_film():
         film[f'band_{i:02d}'] = {
             'type': 'regular',
             'wavelength_min': lbda,
-            'wavelength_max': lbda + 0.5,
-            'values': '0.999, 0.001'
+            'wavelength_max': lbda + 0.0001,
+            'values': '1, 1'
         }
     scene = mi.load_dict({
         'type': 'scene',
@@ -209,5 +209,5 @@ if __name__ == "__main__":
     #test_comp_black_body()
     #test_spectral_conversion()
 
-    #test_spec_film()
-    test_full_eval()
+    test_spec_film()
+    #test_full_eval()

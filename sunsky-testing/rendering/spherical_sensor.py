@@ -13,29 +13,16 @@ class SphericalSensor(mi.Sensor):
         self.up = self.transform.transform_affine(mi.Vector3f(0, 0, 1))
 
     @override
-    def eval_direction(self, it, ds, active = True):
-        return mi.Spectrum(self.pdf_direction(it, ds, active))
-
-    @override
-    def pdf_direction(self, it, ds, active = True):
-        st = dr.safe_sqrt(1 - dr.dot(ds.d, self.up)**2)
-        return (1 / (dr.two_pi * dr.maximum(st, dr.epsilon(mi.Float)))) & active
-
-    @override
-    def pdf_position(self, ps, active = True):
-        return 0.0
-
-    @override
     def sample_ray(self, time, sample1, sample2, sample3, active = True):
-        st, ct = dr.sincos(sample2.y * dr.pi)
-        sp, cp = dr.sincos(sample2.x * dr.two_pi)
-
-        ray = mi.Ray3f(mi.Point3f(0.0), mi.Vector3f(cp*st, sp*st, ct), time)
+        res = mi.Spectrum(1.0)
+        ray = mi.Ray3f(mi.Point3f(0.0), mi.warp.square_to_uniform_sphere(sample2), time)
 
         if dr.hint(mi.is_spectral, mode="scalar"):
-            ray.wavelengths = mi.sample_shifted(sample1) * (mi.MI_CIE_MAX - mi.MI_CIE_MIN) + mi.MI_CIE_MIN
+            si = dr.zeros(mi.SurfaceInteraction3f)
+            ray.wavelengths, res = super().sample_wavelengths(si, sample1, active)
+            #ray.wavelengths = mi.sample_shifted(sample1) * (mi.MI_CIE_MAX - mi.MI_CIE_MIN) + mi.MI_CIE_MIN
 
-        return self.transform.transform_affine(ray), mi.Spectrum(1.0)
+        return self.transform.transform_affine(ray), res
 
 
 mi.register_sensor("spherical", SphericalSensor)
