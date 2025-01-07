@@ -24,5 +24,8 @@ class SphericalSensor(mi.Sensor):
 
         return self.transform.transform_affine(ray), res
 
+    def to_string(self):
+        return f"SphericalSensor[\nfilm: {super().film()}\n]"
+
 
 mi.register_sensor("spherical", SphericalSensor)

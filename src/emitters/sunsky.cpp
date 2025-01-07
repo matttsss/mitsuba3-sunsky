@@ -93,7 +93,14 @@ public:
 
         // ================= GET ALBEDO =================
         dr::eval(m_albedo);
-        FloatStorage albedo = extract_albedo(m_albedo);
+
+        FloatStorage albedo = dr::zeros<FloatStorage>(NB_CHANNELS);
+        if (props.has_property("albedo_test")) {
+            albedo += 1;
+            albedo *= props.get<ScalarFloat>("albedo_test");
+        } else {
+            albedo = extract_albedo(m_albedo);
+        }
 
         // ================= GET ANGLES =================
         m_sun_dir = props.get<ScalarVector3f>("sun_direction");

@@ -1,6 +1,5 @@
 import itertools
 import sys
-import matplotlib.pyplot as plt
 
 sys.path.insert(0, "build/python")
 
@@ -9,6 +8,15 @@ import mitsuba as mi
 
 from render_sky_scene import render_scene
 
+def eval_full_spec(plugin, si, wavelengths, render_res = (512, 1024)):
+
+    output_image = dr.zeros(mi.Float, render_res[0] * render_res[1] * 10)
+    for i, lbda in enumerate(wavelengths):
+        si.wavelengths = lbda
+        res = plugin.eval(si)[0]
+        dr.scatter(output_image, res, i + 10 * dr.arange(mi.UInt32, render_res[0] * render_res[1]))
+
+    return mi.TensorXf(output_image, (*render_res, 10))
 
 def test_spectral_constants():
 
@@ -185,21 +193,15 @@ def test_full_eval():
     })
 
     render_res = (512, 1024)
-    si = dr.zeros(mi.SurfaceInteraction3f)
-    si.wi = -get_spherical_rays(render_res)
 
     start, end = 360, 830
     step = (end - start) / 10
-    lbda = start - step/2
+    wavelengths = [start + step/2 + i*step for i in range(10)]
 
-    output_image = dr.zeros(mi.Float, render_res[0] * render_res[1] * 10)
-    for i in range(10):
-        lbda += step
-        si.wavelengths = lbda
-        res = plugin.eval(si)[0]
-        dr.scatter(output_image, res, i + 10 * dr.arange(mi.UInt32, render_res[0] * render_res[1]))
+    si = dr.zeros(mi.SurfaceInteraction3f)
+    si.wi = -get_spherical_rays(render_res)
 
-    output_image = mi.TensorXf(output_image, (*render_res, 10))
+    output_image = eval_full_spec(plugin, si, wavelengths, render_res)
 
     mi.util.write_bitmap("sunsky-testing/res/renders/full_channels.exr", output_image)
 
