@@ -78,6 +78,9 @@ public:
     using FullSpectrum = mitsuba::Spectrum<Float, is_spectral_v<Spectrum> ? NB_WAVELENGTHS : 3>;
 
     SunskyEmitter(const Properties &props) : Base(props) {
+        if constexpr (!(is_rgb_v<Spectrum> || is_spectral_v<Spectrum>))
+            Throw("Unsupported spectrum type!");
+
         m_sun_scale = props.get<ScalarFloat>("sun_scale", 1.f);
         m_sky_scale = props.get<ScalarFloat>("sky_scale", 1.f);
 
@@ -528,10 +531,7 @@ private:
         SurfaceInteraction3f si = dr::zeros<SurfaceInteraction3f>();
 
         if constexpr (is_rgb_v<Spectrum>) {
-            // TODO find a way to load rgb buffer without loop
-            Color3f temp = albedo_tex->eval(si);
-            for (ScalarUInt32 i = 0; i < NB_CHANNELS; ++i)
-                dr::scatter(albedo, temp[i], (UInt32) i);
+            albedo = dr::ravel(albedo_tex->eval(si));
 
         } else if constexpr (dr::is_array_v<Float> && is_spectral_v<Spectrum>) {
             si.wavelengths = dr::load<FloatStorage>(WAVELENGTHS<ScalarFloat>, NB_CHANNELS);
@@ -542,9 +542,6 @@ private:
                 si.wavelengths = WAVELENGTHS<ScalarFloat>[i];
                 dr::scatter(albedo, albedo_tex->eval(si)[0], (UInt32) i);
             }
-
-        } else {
-            Throw("Unsupported spectrum type");
         }
 
         albedo = dr::clip(albedo, 0.f, 1.f);
