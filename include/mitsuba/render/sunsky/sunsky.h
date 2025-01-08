@@ -329,10 +329,10 @@ NAMESPACE_BEGIN(mitsuba)
         using UInt32Storage = DynamicBuffer<dr::uint32_array_t<Float>>;
         using FloatStorage = DynamicBuffer<Float>;
 
-        turbidity = dr::clip(turbidity - 1, 0.f, 9.f);
-        UInt32 t_low = dr::floor2int<UInt32>(turbidity),
+        turbidity = dr::clip(turbidity, 1.f, 10.f);
+        UInt32 t_low = dr::floor2int<UInt32>(turbidity - 1),
                t_high = t_low + 1;
-        Float  t_rem = turbidity - t_low;
+        Float  t_rem = turbidity - t_high;
 
         constexpr uint32_t t_block_size = dataset_size / NB_TURBIDITY;
 

@@ -148,12 +148,15 @@ public:
         MI_MASKED_FUNCTION(ProfilerPhase::EndpointEvaluate, active);
 
         using SpecUInt32 = dr::uint32_array_t<Spectrum>;
+        using SpecMask   = dr::mask_t<Spectrum>;
+        using SpecLdArray = dr::Array<Spectrum, NB_SUN_LD_PARAMS>;
 
         Vector3f local_wi = dr::normalize(m_to_world.value().inverse().transform_affine(si.wi));
         Float cos_theta = Frame3f::cos_theta(-local_wi),
               cos_gamma = Frame3f::cos_theta(m_local_sun_frame.to_local(-local_wi));
 
         active &= cos_theta >= 0;
+        Mask hit_sun = active & (cos_gamma >= SUN_COS_CUTOFF);
 
         UnpolarizedSpectrum res = 0.f;
         if constexpr (is_rgb_v<Spectrum>) {
@@ -161,7 +164,7 @@ public:
             const SpecUInt32 idx = SpecUInt32({0, 1, 2});
 
             res = m_sky_scale * render_sky(idx, cos_theta, cos_gamma, active);
-            res += m_sun_scale * render_sun<Spectrum>(idx, cos_theta, cos_gamma, active) * 467.069280386; // FIXME: explain this factor
+            res += m_sun_scale * render_sun<Spectrum>(idx, cos_theta, cos_gamma, hit_sun) * 467.069280386; // FIXME: explain this factor
 
             res *= MI_CIE_Y_NORMALIZATION;
 
@@ -171,21 +174,39 @@ public:
             const SpecUInt32 query_idx_low  = dr::floor2int<SpecUInt32>(normalized_wavelengths),
                              query_idx_high = query_idx_low + 1;
 
+            SpecMask valid_low = query_idx_low < NB_CHANNELS,
+                     valid_high = query_idx_high < NB_CHANNELS;
+
             const Spectrum lerp_factor = normalized_wavelengths - query_idx_low;
 
             res = m_sky_scale * dr::lerp(
-                render_sky(query_idx_low, cos_theta, cos_gamma, active & (query_idx_low < NB_CHANNELS)),
-                render_sky(query_idx_high, cos_theta, cos_gamma, active & (query_idx_high < NB_CHANNELS)),
+                render_sky(query_idx_low, cos_theta, cos_gamma, active & valid_low),
+                render_sky(query_idx_high, cos_theta, cos_gamma, active & valid_high),
                 lerp_factor);
 
-            res += m_sun_scale * dr::lerp(
-                render_sun<Spectrum>(query_idx_low, cos_theta, cos_gamma, active & (query_idx_low < NB_CHANNELS)),
-                render_sun<Spectrum>(query_idx_high, cos_theta, cos_gamma, active & (query_idx_high < NB_CHANNELS)),
-                lerp_factor);
+            Spectrum sun_rad_low  = render_sun<Spectrum>(query_idx_low, cos_theta, cos_gamma, hit_sun & valid_low),
+                     sun_rad_high = render_sun<Spectrum>(query_idx_high, cos_theta, cos_gamma, hit_sun & valid_high),
+                     sun_rad = dr::lerp(sun_rad_low, sun_rad_high, lerp_factor);
+
+            SpecLdArray sun_ld_low  = dr::gather<SpecLdArray>(m_sun_ld, query_idx_low, hit_sun & valid_low),
+                        sun_ld_high = dr::gather<SpecLdArray>(m_sun_ld, query_idx_high, hit_sun & valid_high),
+                        sun_ld_coefs = dr::lerp(sun_ld_low, sun_ld_high, lerp_factor);
+
+            // Angles computation
+            Float sin_gamma_sqr      = dr::fnmadd(cos_gamma, cos_gamma, 1.f),
+                  sin_sun_cutoff_sqr = dr::fnmadd(SUN_COS_CUTOFF, SUN_COS_CUTOFF, 1.f);
+            Float cos_psi = dr::safe_sqrt(1 - sin_gamma_sqr / sin_sun_cutoff_sqr);
+
+            Spectrum sun_ld = 0.f;
+            for (uint8_t j = 0; j < NB_SUN_LD_PARAMS; ++j)
+                sun_ld += dr::pow(cos_psi, j) * sun_ld_coefs[j];
+
+
+            res += m_sun_scale * sun_rad * sun_ld;
 
         }
 
-        return res & active;
+        return res & ((res > 0.f) & active);
     }
 
 
@@ -390,57 +411,47 @@ private:
         const Float& cos_theta, const Float& cos_gamma,
         const dr::mask_t<Spec>& active) const {
 
-        using SpecMask = dr::mask_t<Spec>;
         using SpecUInt32 = dr::uint32_array_t<Spec>;
-
-        SpecMask hit_sun = active & (cos_gamma >= SUN_COS_CUTOFF);
 
         // Angles computation
         Float elevation =  0.5f * dr::Pi<Float> - dr::acos(cos_theta);
-        Float sin_gamma_sqr      = dr::fnmadd(cos_theta, cos_theta, 1.f),
-              sin_sun_cutoff_sqr = dr::fnmadd(SUN_COS_CUTOFF, SUN_COS_CUTOFF, 1.f);
-        Float cos_phi = dr::safe_sqrt(1 - sin_gamma_sqr / sin_sun_cutoff_sqr);
 
         // Find the segment of the piecewise function we are in
         UInt32 pos = dr::floor2int<UInt32>(dr::pow(2 * elevation * dr::InvPi<Float>, 1.f/3.f) * NB_SUN_SEGMENTS);
-        pos = dr::minimum(pos, NB_SUN_SEGMENTS - 1);
+               pos = dr::minimum(pos, NB_SUN_SEGMENTS - 1);
 
-        const Float break_x = 0.5f * dr::Pi<Float> * dr::pow((Float)pos / NB_SUN_SEGMENTS, 3.f);
-        const Float x = elevation - break_x;
+        const Float break_x = 0.5f * dr::Pi<Float> * dr::pow((Float)pos / NB_SUN_SEGMENTS, 3.f),
+                    x = elevation - break_x;
 
         Spec solar_radiance = 0.f;
         if constexpr (is_spectral_v<Spec>) {
+            DRJIT_MARK_USED(cos_gamma);
             // Compute sun radiance
-            Spec sun_radiance = 0.f;
             SpecUInt32 global_idx = pos * NB_WAVELENGTHS * NB_SUN_CTRL_PTS + channel_idx * NB_SUN_CTRL_PTS;
             for (uint8_t k = 0; k < NB_SUN_CTRL_PTS; ++k)
-                sun_radiance += dr::pow(x, k) * dr::gather<Spec>(m_sun_radiance, global_idx + k, hit_sun);
-
-
-            // Compute limb darkening
-            Spec sun_ld = 0.f;
-            global_idx = channel_idx * NB_SUN_LD_PARAMS;
-            for (uint8_t j = 0; j < NB_SUN_LD_PARAMS; ++j)
-                sun_ld += dr::pow(cos_phi, j) * dr::gather<Spec>(m_sun_ld, global_idx + j, hit_sun);
-
-            solar_radiance = sun_ld * sun_radiance;
+                solar_radiance += dr::pow(x, k) * dr::gather<Spec>(m_sun_radiance, global_idx + k, active);
 
         } else {
             // Reproduces the spectral equation above but distributes the product of sums
             // since it uses interpolated coefficients from the spectral dataset
+
+            Float sin_gamma_sqr      = dr::fnmadd(cos_gamma, cos_gamma, 1.f),
+                  sin_sun_cutoff_sqr = dr::fnmadd(SUN_COS_CUTOFF, SUN_COS_CUTOFF, 1.f);
+            Float cos_psi = dr::safe_sqrt(1 - sin_gamma_sqr / sin_sun_cutoff_sqr);
 
             SpecUInt32 global_idx = pos * (3 * NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS) +
                                     channel_idx * (NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS);
 
             for (uint8_t k = 0; k < NB_SUN_CTRL_PTS; ++k) {
                 for (uint8_t j = 0; j < NB_SUN_LD_PARAMS; ++j) {
-                    solar_radiance += dr::pow(x, k) * dr::pow(cos_phi, j) *
-                                      dr::gather<Spec>(m_sun_radiance, global_idx + k * NB_SUN_LD_PARAMS + j, hit_sun);
+                    solar_radiance += dr::pow(x, k) * dr::pow(cos_psi, j) *
+                                      dr::gather<Spec>(m_sun_radiance, global_idx + k * NB_SUN_LD_PARAMS + j, active);
                 }
             }
         }
 
-        return solar_radiance & hit_sun;
+        return solar_radiance & active;
+
     }
 
     MI_INLINE Point2f gaussian_cdf(const Point2f& mu, const Point2f& sigma, const Point2f& x) const {

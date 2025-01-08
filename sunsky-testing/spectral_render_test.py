@@ -93,15 +93,21 @@ def test_spectral_conversion():
         dr.print(lum)
 
 def test_comp_black_body():
-    t, a = 1, 0.0
-    eta = dr.deg2rad(89.5)
+    import matplotlib.pyplot as plt
+
+    t, a = 5, 0.9
+    eta = 0
     phi_sun = -4*dr.pi/5
+
+    dr.print("Eta: {eta}", eta=eta)
 
     sp, cp = dr.sincos(phi_sun)
     st, ct = dr.sincos(dr.pi/2 - eta)
+    sun_dir = mi.Vector3f(cp * st, sp * st, ct)
     plugin = mi.load_dict({
         'type': 'sunsky',
         'sun_direction': [cp * st, sp * st, ct],
+        'sky_scale': 1.0,
         'turbidity': t,
         'albedo': a,
     })
@@ -111,16 +117,41 @@ def test_comp_black_body():
         'temperature': 5778,
     })
 
+    sp, cp = dr.sincos(phi_sun - dr.deg2rad(0.1))
+    st, ct = dr.sincos(dr.pi/2 - eta)
+
+    start, end = 360, 830
+    step = (end - start) / 20
+    wavelengths = [start + step/2 + i*step for i in range(20)]
+    #wavelengths = [320 + 40 * i for i in range(11)]
+    #wavelengths = [405]
     si = dr.zeros(mi.SurfaceInteraction3f)
     if dr.hint(mi.is_spectral, mode="scalar"):
-        si.wavelengths = dr.arange(mi.Float, 320, 760, 40)
+        si.wavelengths = mi.Float(wavelengths)
     si.wi = -mi.Vector3f(cp * st, sp * st, ct)
 
     sunsky_res = plugin.eval(si)
     blackbody_res = blackbody.eval(si)
 
-    dr.print("Sunsky luminance: {lum}", lum=dr.mean(mi.luminance(sunsky_res, si.wavelengths)))
-    dr.print("Blackbody luminance: {lum}", lum=dr.mean(mi.luminance(blackbody_res, si.wavelengths)))
+    dr.print("Colored {rgb}", rgb=dr.mean(mi.spectrum_to_srgb(sunsky_res, si.wavelengths), axis=1))
+    dr.print("Radiance: {rad}", rad=sunsky_res[0])
+
+    ref_model = [0.00633391, 0.0189661, 0.91312, 3.84535, 23.9063, 75.3064, 175.197, 389.69, 655.94, 1180.58, 1748.37, 2412.53, 3118.65, 3855.71, 4556.33, 0, 0, 0, 0, 0]
+    plt.plot(wavelengths, sunsky_res[0].numpy(), label="Sunsky")
+    plt.plot(wavelengths, blackbody_res[0].numpy(), label="Blackbody (No atmosphere)")
+    plt.plot(wavelengths, ref_model, label="Reference")
+
+    #matching_func = mi.linear_rgb_rec(si.wavelengths[0])
+    #plt.plot(wavelengths, matching_func[0].numpy(), label="Red color matching function", color="red")
+    #plt.plot(wavelengths, matching_func[1].numpy(), label="Green color matching function", color="green")
+    #plt.plot(wavelengths, matching_func[2].numpy(), label="Blue color matching function", color="blue")
+
+    plt.axvline(720, linestyle='--', color="red", label="Last valid wavelength")
+    plt.axhline(0, color="black")
+    plt.xlabel("Wavelengths[nm]")
+    plt.ylabel(r"Radiance[$W/(m^2 \cdot sr \cdot nm)$]")
+    plt.legend()
+    plt.show()
 
 
 def test_spec_film():
@@ -175,7 +206,7 @@ def test_spec_film():
     mi.util.write_bitmap("sunsky-testing/res/renders/full_channels.exr", image)
 
 def test_full_eval():
-    from helpers import get_spherical_rays
+    from helpers import get_camera_rays
 
     t, a = 2.5, 0.0
     eta = dr.deg2rad(0)
@@ -186,8 +217,8 @@ def test_full_eval():
     plugin = mi.load_dict({
         'type': 'sunsky',
         'sun_direction': [cp * st, sp * st, ct],
-        'sun_scale': 0.0,
-        'sky_scale': 1.0,
+        'sun_scale': 1.0,
+        'sky_scale': 0.0,
         'turbidity': t,
         'albedo': a,
     })
@@ -199,7 +230,7 @@ def test_full_eval():
     wavelengths = [start + step/2 + i*step for i in range(10)]
 
     si = dr.zeros(mi.SurfaceInteraction3f)
-    si.wi = -get_spherical_rays(render_res)
+    si.wi = -get_camera_rays(mi.Vector3f(cp * st, sp * st, ct), (0.1, 0.1), render_res)
 
     output_image = eval_full_spec(plugin, si, wavelengths, render_res)
 
@@ -208,8 +239,8 @@ def test_full_eval():
 if __name__ == "__main__":
     mi.set_variant("cuda_ad_spectral")
     #test_spectral_constants()
-    #test_comp_black_body()
+    test_comp_black_body()
     #test_spectral_conversion()
 
-    test_spec_film()
+    #test_spec_film()
     #test_full_eval()
