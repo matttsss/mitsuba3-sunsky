@@ -54,7 +54,6 @@ def render_and_write_scene(scene_name):
 if __name__ == "__main__":
     mi.set_variant("cuda_ad_rgb")
     dr.set_log_level(dr.LogLevel.Warn)
-    mi.write_sun_sky_model_data("resources/sunsky/")
 
     if mi.variant() == "cuda_ad_rgb":
         render_and_write_scene("test_sun_rgb")

@@ -48,8 +48,8 @@ def render_and_compare(ref_path, params: tuple[float]):
                 else eval_full_spec(sky, si, wavelengths, render_res)
     reference_scene = mi.Bitmap(ref_path)
 
-    rtol = 0.20
-    atol = rtol/100
+    rtol = 0.013
+    atol = rtol/1000
     if not dr.allclose(rendered_scene, mi.TensorXf(reference_scene), rtol=rtol, atol=atol):
         print(f"Fail when rendering {params=}")
         print("Reference is ", ref_path)

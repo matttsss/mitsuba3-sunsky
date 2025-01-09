@@ -84,6 +84,9 @@ public:
         m_sun_scale = props.get<ScalarFloat>("sun_scale", 1.f);
         m_sky_scale = props.get<ScalarFloat>("sky_scale", 1.f);
 
+        m_sun_sampling_weight = m_sun_scale;
+        m_sky_sampling_weight = m_sky_scale;
+
         m_turbidity = props.get<ScalarFloat>("turbidity", 3.f);
         dr::make_opaque(m_turbidity);
 
@@ -103,7 +106,7 @@ public:
         }
 
         // ================= GET ANGLES =================
-        m_sun_dir = props.get<ScalarVector3f>("sun_direction");
+        m_sun_dir = dr::normalize(props.get<ScalarVector3f>("sun_direction"));
         dr::make_opaque(m_sun_dir);
 
         update_angles();
@@ -174,22 +177,21 @@ public:
             const SpecUInt32 query_idx_low  = dr::floor2int<SpecUInt32>(normalized_wavelengths),
                              query_idx_high = query_idx_low + 1;
 
-            SpecMask valid_low = query_idx_low < NB_CHANNELS,
-                     valid_high = query_idx_high < NB_CHANNELS;
+            SpecMask valid_idx = (query_idx_low < NB_CHANNELS) & (query_idx_high < NB_CHANNELS);
 
             const Spectrum lerp_factor = normalized_wavelengths - query_idx_low;
 
             res = m_sky_scale * dr::lerp(
-                render_sky(query_idx_low, cos_theta, cos_gamma, active & valid_low),
-                render_sky(query_idx_high, cos_theta, cos_gamma, active & valid_high),
+                render_sky(query_idx_low, cos_theta, cos_gamma, active & valid_idx),
+                render_sky(query_idx_high, cos_theta, cos_gamma, active & valid_idx),
                 lerp_factor);
 
-            Spectrum sun_rad_low  = render_sun<Spectrum>(query_idx_low, cos_theta, cos_gamma, hit_sun & valid_low),
-                     sun_rad_high = render_sun<Spectrum>(query_idx_high, cos_theta, cos_gamma, hit_sun & valid_high),
+            Spectrum sun_rad_low  = render_sun<Spectrum>(query_idx_low, cos_theta, cos_gamma, hit_sun & valid_idx),
+                     sun_rad_high = render_sun<Spectrum>(query_idx_high, cos_theta, cos_gamma, hit_sun & valid_idx),
                      sun_rad = dr::lerp(sun_rad_low, sun_rad_high, lerp_factor);
 
-            SpecLdArray sun_ld_low  = dr::gather<SpecLdArray>(m_sun_ld, query_idx_low, hit_sun & valid_low),
-                        sun_ld_high = dr::gather<SpecLdArray>(m_sun_ld, query_idx_high, hit_sun & valid_high),
+            SpecLdArray sun_ld_low  = dr::gather<SpecLdArray>(m_sun_ld, query_idx_low, hit_sun & valid_idx),
+                        sun_ld_high = dr::gather<SpecLdArray>(m_sun_ld, query_idx_high, hit_sun & valid_idx),
                         sun_ld_coefs = dr::lerp(sun_ld_low, sun_ld_high, lerp_factor);
 
             // Angles computation
@@ -206,7 +208,7 @@ public:
 
         }
 
-        return res & ((res > 0.f) & active);
+        return res & active;
     }
 
 
@@ -216,7 +218,7 @@ public:
         MI_MASKED_FUNCTION(ProfilerPhase::EndpointSampleDirection, active);
 
         // Sample the sun or the sky
-        const ScalarFloat boundary = m_sky_scale / (m_sky_scale + m_sun_scale);
+        const ScalarFloat boundary = m_sky_sampling_weight / (m_sky_sampling_weight + m_sun_sampling_weight);
         auto [sample_dir, pdf] = dr::select(
                 sample.x() < boundary,
                 sample_sky({sample.x() / boundary, sample.y()}, active),
@@ -266,7 +268,7 @@ public:
         Float sun_pdf = warp::square_to_uniform_cone_pdf<true>(m_local_sun_frame.to_local(local_dir), SUN_COS_CUTOFF);
         Float sky_pdf = tgmm_pdf(from_spherical(local_dir), active) / sin_theta;
 
-        Float combined_pdf = (m_sky_scale * sky_pdf + m_sun_scale * sun_pdf) / (m_sky_scale + m_sun_scale);
+        Float combined_pdf = (m_sky_sampling_weight * sky_pdf + m_sun_sampling_weight * sun_pdf) / (m_sky_sampling_weight + m_sun_sampling_weight);
 
         return dr::select(active, combined_pdf, 0.f);
     }
@@ -574,7 +576,7 @@ private:
     // ================================================================================================
 
     /// Offset used to avoid division by zero in the pdf computation
-    static constexpr ScalarFloat SIN_OFFSET = dr::Epsilon<Float>; // chi2 passes with 0.00775
+    static constexpr ScalarFloat SIN_OFFSET = 0.00775; // chi2 passes with 0.00775
     /// Number of channels used in the skylight model
     static constexpr uint32_t NB_CHANNELS = is_spectral_v<Spectrum> ? NB_WAVELENGTHS : 3;
 
@@ -593,6 +595,9 @@ private:
     Float m_turbidity;
     ScalarFloat m_sky_scale;
     ScalarFloat m_sun_scale;
+    ScalarFloat m_sky_sampling_weight;
+    ScalarFloat m_sun_sampling_weight;
+
     ref<Texture> m_albedo;
 
     // Sun parameters

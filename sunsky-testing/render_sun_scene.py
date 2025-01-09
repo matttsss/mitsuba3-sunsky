@@ -78,4 +78,4 @@ if __name__ == "__main__":
     else:
         render_and_write_scene("test_sun_scalar")
 
-    render_tiles()
+    #render_tiles()

@@ -99,8 +99,6 @@ def test_comp_black_body():
     eta = 0
     phi_sun = -4*dr.pi/5
 
-    dr.print("Eta: {eta}", eta=eta)
-
     sp, cp = dr.sincos(phi_sun)
     st, ct = dr.sincos(dr.pi/2 - eta)
     sun_dir = mi.Vector3f(cp * st, sp * st, ct)
@@ -133,21 +131,26 @@ def test_comp_black_body():
     sunsky_res = plugin.eval(si)
     blackbody_res = blackbody.eval(si)
 
-    dr.print("Colored {rgb}", rgb=dr.mean(mi.spectrum_to_srgb(sunsky_res, si.wavelengths), axis=1))
+    dr.print("Eta: {eta}, Gamma: {gamma}", eta=eta, gamma=dr.acos(dr.dot(sun_dir, -si.wi)))
     dr.print("Radiance: {rad}", rad=sunsky_res[0])
 
-    ref_model = [0.00633391, 0.0189661, 0.91312, 3.84535, 23.9063, 75.3064, 175.197, 389.69, 655.94, 1180.58, 1748.37, 2412.53, 3118.65, 3855.71, 4556.33, 0, 0, 0, 0, 0]
+    ref_model = [0.0209954, 0.0602066, 0.377907, 0.870337, 2.32443, 4.21748, 6.78515, 10.7099, 15.2494, 25.6342, 36.2361, 47.1432, 62.8167, 81.9069, 106.086, 0, 0, 0, 0, 0]
     plt.plot(wavelengths, sunsky_res[0].numpy(), label="Sunsky")
     plt.plot(wavelengths, blackbody_res[0].numpy(), label="Blackbody (No atmosphere)")
     plt.plot(wavelengths, ref_model, label="Reference")
 
+    ref_model = mi.Float(ref_model)
+    dr.print("Relative error: {err}", err=dr.abs(sunsky_res[0] - ref_model) / (ref_model + 1e-5))
+
+    dr.print("Model color: {model_color}, Ref color: {ref_color}",
+             model_color=dr.mean(mi.spectrum_to_srgb(sunsky_res, si.wavelengths), axis=1),
+             ref_color=dr.mean(mi.spectrum_to_srgb(ref_model, si.wavelengths[0]), axis=1))
     #matching_func = mi.linear_rgb_rec(si.wavelengths[0])
     #plt.plot(wavelengths, matching_func[0].numpy(), label="Red color matching function", color="red")
     #plt.plot(wavelengths, matching_func[1].numpy(), label="Green color matching function", color="green")
     #plt.plot(wavelengths, matching_func[2].numpy(), label="Blue color matching function", color="blue")
 
     plt.axvline(720, linestyle='--', color="red", label="Last valid wavelength")
-    plt.axhline(0, color="black")
     plt.xlabel("Wavelengths[nm]")
     plt.ylabel(r"Radiance[$W/(m^2 \cdot sr \cdot nm)$]")
     plt.legend()
