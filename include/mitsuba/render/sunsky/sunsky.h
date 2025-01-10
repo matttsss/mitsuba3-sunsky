@@ -49,8 +49,8 @@ NAMESPACE_BEGIN(mitsuba)
     /// Number of parameters for each gaussian component
     #define NB_GAUSSIAN_PARAMS 5
 
-    /// Sun aperture angle in degrees
-    #define SUN_APERTURE 0.5358
+    /// Sun half aperture angle in radians
+    #define SUN_HALF_APERTURE (dr::deg_to_rad(0.5358/2.0))
     /// Mean radius of the Earth
     #define EARTH_MEAN_RADIUS 6371.01   // In km
     /// Astronomical unit
@@ -337,8 +337,8 @@ NAMESPACE_BEGIN(mitsuba)
         constexpr uint32_t t_block_size = dataset_size / NB_TURBIDITY;
 
         UInt32Storage idx = dr::arange<UInt32Storage>(t_block_size);
-        return dr::lerp(dr::gather<FloatStorage>(sun_radiance_dataset, t_low * t_block_size + idx, t_low < NB_TURBIDITY - 1),
-                        dr::gather<FloatStorage>(sun_radiance_dataset, t_high * t_block_size + idx, t_high < NB_TURBIDITY - 1),
+        return dr::lerp(dr::gather<FloatStorage>(sun_radiance_dataset, t_low * t_block_size + idx, t_low < NB_TURBIDITY),
+                        dr::gather<FloatStorage>(sun_radiance_dataset, t_high * t_block_size + idx, t_high < NB_TURBIDITY),
                         t_rem);
     }
 

@@ -156,6 +156,7 @@ public:
 
         Vector3f local_wi = dr::normalize(m_to_world.value().inverse().transform_affine(si.wi));
         Float cos_theta = Frame3f::cos_theta(-local_wi),
+              gamma = dr::unit_angle(m_sun_dir, -local_wi),
               cos_gamma = Frame3f::cos_theta(m_local_sun_frame.to_local(-local_wi));
 
         active &= cos_theta >= 0;
@@ -195,9 +196,15 @@ public:
                         sun_ld_coefs = dr::lerp(sun_ld_low, sun_ld_high, lerp_factor);
 
             // Angles computation
-            Float sin_gamma_sqr      = dr::fnmadd(cos_gamma, cos_gamma, 1.f),
-                  sin_sun_cutoff_sqr = dr::fnmadd(SUN_COS_CUTOFF, SUN_COS_CUTOFF, 1.f);
-            Float cos_psi = dr::safe_sqrt(1 - sin_gamma_sqr / sin_sun_cutoff_sqr);
+            //Float64 sin_gamma_sqr      = dr::fnmadd(cos_gamma, cos_gamma, 1.f),
+            //      sin_sun_cutoff_sqr = dr::fnmadd(SUN_COS_CUTOFF, SUN_COS_CUTOFF, 1.f);
+            //Float64 cos_psi = dr::safe_sqrt(1 - sin_gamma_sqr / sin_sun_cutoff_sqr);
+
+            const Float64 sol_rad_sin = dr::sin(SUN_HALF_APERTURE);
+            const Float64 ar2 = 1 / ( sol_rad_sin * sol_rad_sin );
+            const Float64 singamma = dr::sin(gamma);
+            const Float64 sc2 = 1.0 - ar2 * singamma * singamma;
+            const Float cos_psi = dr::safe_sqrt(sc2);
 
             Spectrum sun_ld = 0.f;
             for (uint8_t j = 0; j < NB_SUN_LD_PARAMS; ++j)
@@ -587,7 +594,7 @@ private:
                               TGMM_DATA_SIZE = (NB_TURBIDITY - 1) * NB_ETAS * NB_GAUSSIAN * NB_GAUSSIAN_PARAMS;
 
     /// Cosine of the sun's cutoff angle
-    const Float SUN_COS_CUTOFF = (Float) dr::cos(0.5 * SUN_APERTURE * dr::Pi<double> / 180.0);
+    const Float SUN_COS_CUTOFF = (Float) dr::cos(SUN_HALF_APERTURE);
 
     Float m_surface_area;
     BoundingSphere3f m_bsphere;
