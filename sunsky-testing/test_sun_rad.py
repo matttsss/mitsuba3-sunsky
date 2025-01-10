@@ -5,7 +5,19 @@ import drjit as dr
 import mitsuba as mi
 
 phi = dr.pi/5
-SUN_HALF_APP = dr.deg2rad(0.25)
+SUN_HALF_APP = dr.deg2rad(0.5358/2.0)
+
+def get_blackbody_rad(wavelengths):
+    blackbody = mi.load_dict({
+        'type': 'blackbody',
+        'temperature': 5778,
+    })
+    si = dr.zeros(mi.SurfaceInteraction3f)
+    si.wavelengths = mi.Float(wavelengths)
+
+    return blackbody.eval(si)[0]
+
+
 
 def get_plugin(turb, eta_ray, gamma, albedo = 0.0):
     theta_sun = dr.pi/2 - eta_ray - gamma
@@ -44,10 +56,9 @@ def compute_wav_sun(wavelengths, turb, eta_ray, gamma):
     #         max_err=dr.max(relative_err),
     #         mean_err=dr.mean(relative_err)
     #         )
-    return dr.mean(relative_err)
+    return dr.mean(relative_err), res
 
-if __name__ == "__main__":
-    mi.set_variant('cuda_ad_spectral')
+def test_sun_rad_quadrature():
 
     def make_range_idx(nb, a, b):
         return [(i/(nb-1)) * (b - a) + a for i in range(nb)]
@@ -68,7 +79,7 @@ if __name__ == "__main__":
     for (eta, turb, gamma) in itertools.product(etas, turbs, gammas):
         #if i == 0:
         #    break
-        err = compute_wav_sun(wavs, turb, eta, gamma)
+        err, _ = compute_wav_sun(wavs, turb, eta, gamma)
         dr.print("Testing eta={eta}, turb={turb}, gamma={gamma}\n\t Error: {err}",
                  eta=eta, turb=turb, gamma=gamma, err=err)
 
@@ -80,4 +91,39 @@ if __name__ == "__main__":
         i += 1
 
     dr.print("Max error: {err}, for turbidity {turb}, eta {eta}, gamma {gamma}", err=max_err, turb=max_err_turb, eta=max_err_eta, gamma=max_err_gamma)
-    #compute_wav_sun(wavs, 10, 1.5708, 0.00436332)
+    #compute_wav_sun(wavs, 6.75, 9*dr.pi/10, 0.0)
+
+def plot_some_radiance():
+    import matplotlib.pyplot as plt
+
+    start, end = 320, 720
+    step = (end - start) / 20
+    wavs = [start + step/2 + i*step for i in range(20)]
+
+    params = [(3.2, dr.deg2rad(30), SUN_HALF_APP/6), (2, dr.deg2rad(22), SUN_HALF_APP/5), (5, dr.deg2rad(60), SUN_HALF_APP/10), (3, dr.deg2rad(1), 0.0)]
+    param_str = [(r"30^{\circ}", r"\frac{\alpha}{12}"),
+                 (r"22^{\circ}", r"\frac{\alpha}{10}"),
+                 (r"60^{\circ}", r"\frac{\alpha}{20}"),
+                 (r"1^{\circ}", r"0")]
+
+    res = [compute_wav_sun(wavs, *param) for param in params]
+
+    for (err, rad), (t, _, _), (eta_str, gamma_str) in zip(res, params, param_str):
+        err = err[0]
+        plt.plot(wavs, rad.numpy(), label=f'$t={t}$, $\eta={eta_str}$, $\gamma={gamma_str}$ MRE={err:.2e}')
+
+
+    plt.plot(wavs, get_blackbody_rad(wavs).numpy(), label='Blackbody (5778K)')
+
+    plt.legend(loc="center right", bbox_to_anchor=(1.0, 0.35))
+    plt.grid()
+    plt.xlabel('Wavelength [nm]')
+    plt.ylabel(r'Radiance [$W/(m^2 \cdot sr \cdot nm)$]')
+
+    plt.show()
+
+if __name__ == "__main__":
+    mi.set_variant('cuda_ad_spectral')
+
+    #test_sun_rad_quadrature()
+    plot_some_radiance()
