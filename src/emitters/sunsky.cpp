@@ -209,7 +209,7 @@ public:
         const Vector3f sample_dir = dr::select(
                 sample.x() < m_sky_sampling_w,
                 sample_sky({sample.x() / m_sky_sampling_w, sample.y()}, active),
-                warp::square_to_uniform_cone({(sample.x() - m_sky_sampling_w) / (1 - m_sky_sampling_w), sample.y()}, SUN_COS_CUTOFF)
+                sample_sun({(sample.x() - m_sky_sampling_w) / (1 - m_sky_sampling_w), sample.y()})
         );
 
         // Automatically enlarge the bounding sphere when it does not contain the reference point
@@ -427,7 +427,7 @@ private:
 
             const Float64 sol_rad_sin = dr::sin(SUN_HALF_APERTURE);
             const Float64 ar2 = 1 / ( sol_rad_sin * sol_rad_sin );
-            const Float64 singamma = dr::sin(gamma);
+            const Float64 singamma = (Float64) dr::sin(gamma);
             const Float64 sc2 = 1.0 - ar2 * singamma * singamma;
             const Float cos_psi = dr::safe_sqrt(sc2);
 
@@ -446,7 +446,22 @@ private:
 
     }
 
-    template<typename Spec> Spec compute_sun_ld(
+    /**
+     * \brief Computes the limb darkening of the sun for a given gamma.
+     * Only works for spectral mode since limb darkening is backed into the RGB
+     * model
+     *
+     * @tparam Spec Spectral type to render (adapts the number of channels)
+     * @param channel_idx_low Indices of the lower wavelengths
+     * @param channel_idx_high Indices of the upper wavelengths
+     * @param lerp_f Linear interpolation factor for wavelength
+     * @param gamma Angle between the sun's center and the viewing ray
+     * @param active Indicates if the channel indices are valid and that the sun
+     * was hit
+     * @return The spectral values of limb darkening to apply to the sun's
+     * radiance by multiplication
+     */
+    template <typename Spec> Spec compute_sun_ld(
             const dr::uint32_array_t<Spec>& channel_idx_low,
             const dr::uint32_array_t<Spec>& channel_idx_high,
             const Spec& lerp_f, const Float& gamma,
@@ -520,11 +535,9 @@ private:
         return m_to_world.value().transform_affine(to_spherical(angles));
     }
 
-    std::pair<Vector3f, Float> sample_sun(const Point2f& sample) const {
+    Vector3f sample_sun(const Point2f& sample) const {
         Vector3f sun_sample = warp::square_to_uniform_cone(sample, SUN_COS_CUTOFF);
-        Float pdf = warp::square_to_uniform_cone_pdf(sun_sample, SUN_COS_CUTOFF);
-
-        return { m_local_sun_frame.to_world(sun_sample), pdf };
+        return m_local_sun_frame.to_world(sun_sample);
     }
 
     Float tgmm_pdf(Point2f angles, Mask active) const {
@@ -591,6 +604,12 @@ private:
         m_local_sun_frame = Frame3f(local_sun_dir);
     }
 
+    /**
+     * \brief Estimates the ratio of sky to sun luminance over the hemisphere,
+     * can be used to estimate the sampling weight of the sun and sky.
+     *
+     * @return The sky's ratio of luminance, in [0, 1]
+     */
     Float estimate_sky_sun_ratio() const {
         FullSpectrum sky_radiance = dr::zeros<FullSpectrum>(),
                      sun_radiance = dr::zeros<FullSpectrum>();
