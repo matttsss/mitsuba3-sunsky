@@ -1,6 +1,7 @@
 #include <mitsuba/core/bsphere.h>
 #include <mitsuba/core/properties.h>
 #include <mitsuba/core/warp.h>
+#include <mitsuba/core/quad.h>
 #include <mitsuba/render/emitter.h>
 #include <mitsuba/render/scene.h>
 
@@ -72,20 +73,18 @@ public:
     MI_IMPORT_TYPES(Scene, Shape, Texture)
 
     using FloatStorage = DynamicBuffer<Float>;
-
     using Gaussian = dr::Array<Float, NB_GAUSSIAN_PARAMS>;
-
-    using FullSpectrum = mitsuba::Spectrum<Float, is_spectral_v<Spectrum> ? NB_WAVELENGTHS : 3>;
+    using FullSpectrum = std::conditional_t<is_spectral_v<Spectrum>, mitsuba::Spectrum<Float, NB_WAVELENGTHS>, Spectrum>;
 
     SunskyEmitter(const Properties &props) : Base(props) {
         if constexpr (!(is_rgb_v<Spectrum> || is_spectral_v<Spectrum>))
             Throw("Unsupported spectrum type!");
 
+        if constexpr (is_spectral_v<Spectrum>)
+            c_wavelengths = {320, 360, 400, 440, 480, 520, 560, 600, 640, 680, 720};
+
         m_sun_scale = props.get<ScalarFloat>("sun_scale", 1.f);
         m_sky_scale = props.get<ScalarFloat>("sky_scale", 1.f);
-
-        m_sun_sampling_weight = m_sun_scale;
-        m_sky_sampling_weight = m_sky_scale;
 
         m_turbidity = props.get<ScalarFloat>("turbidity", 3.f);
         dr::make_opaque(m_turbidity);
@@ -137,6 +136,7 @@ public:
         m_gaussians = distrib_params;
         m_gaussian_distr = DiscreteDistribution<Float>(mis_weights);
 
+        m_sky_sampling_w = estimate_sky_sun_ratio();
         // ================= GENERAL PARAMETERS =================
 
         /* Until `set_scene` is called, we have no information
@@ -206,11 +206,10 @@ public:
         MI_MASKED_FUNCTION(ProfilerPhase::EndpointSampleDirection, active);
 
         // Sample the sun or the sky
-        const ScalarFloat boundary = m_sky_sampling_weight / (m_sky_sampling_weight + m_sun_sampling_weight);
         const Vector3f sample_dir = dr::select(
-                sample.x() < boundary,
-                sample_sky({sample.x() / boundary, sample.y()}, active),
-                warp::square_to_uniform_cone({(sample.x() - boundary) / (1 - boundary), sample.y()}, SUN_COS_CUTOFF)
+                sample.x() < m_sky_sampling_w,
+                sample_sky({sample.x() / m_sky_sampling_w, sample.y()}, active),
+                warp::square_to_uniform_cone({(sample.x() - m_sky_sampling_w) / (1 - m_sky_sampling_w), sample.y()}, SUN_COS_CUTOFF)
         );
 
         // Automatically enlarge the bounding sphere when it does not contain the reference point
@@ -249,7 +248,7 @@ public:
         Float sun_pdf = warp::square_to_uniform_cone_pdf<true>(m_local_sun_frame.to_local(local_dir), SUN_COS_CUTOFF);
         Float sky_pdf = tgmm_pdf(from_spherical(local_dir), active) / sin_theta;
 
-        Float combined_pdf = (m_sky_sampling_weight * sky_pdf + m_sun_sampling_weight * sun_pdf) / (m_sky_sampling_weight + m_sun_sampling_weight);
+        Float combined_pdf = m_sky_sampling_w * sky_pdf + (1 - m_sky_sampling_w) * sun_pdf;
 
         return dr::select(active, combined_pdf, 0.f);
     }
@@ -592,6 +591,89 @@ private:
         m_local_sun_frame = Frame3f(local_sun_dir);
     }
 
+    Float estimate_sky_sun_ratio() const {
+        FullSpectrum sky_radiance = dr::zeros<FullSpectrum>(),
+                     sun_radiance = dr::zeros<FullSpectrum>();
+
+        dr::uint32_array_t<FullSpectrum> channel_idx;
+        if constexpr (is_rgb_v<Spectrum>)
+            channel_idx = {0, 1, 2};
+        else
+            channel_idx = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+
+        if constexpr (!dr::is_array_v<Float>)
+            return 0.5f;
+        else {
+
+            // Quadrature points and weights
+            const auto [x, w_x] = quad::gauss_legendre<Float>(200);
+
+            // Compute sky radiance over hemisphere
+            {
+
+                // Mapping for [-1, 1] x [-1, 1] -> [0, 2pi] x [0, 1]
+                const Float inv_J = 0.5f * dr::Pi<Float>;
+                Float phi = dr::Pi<Float> * (x + 1),
+                      cos_theta = 0.5f * (x + 1);
+
+                std::tie(phi, cos_theta) = dr::meshgrid(phi, cos_theta);
+                const auto [w_phi, w_cos_theta] = dr::meshgrid(w_x, w_x);
+
+                const auto [sin_phi, cos_phi] = dr::sincos(phi);
+                const auto sin_theta = dr::safe_sqrt(1 - dr::square(cos_theta));
+
+                Vector3f sky_wo {sin_theta * cos_phi, sin_theta * sin_phi, cos_theta};
+                Float cos_gamma = Frame3f::cos_theta(m_local_sun_frame.to_local(sky_wo));
+
+                FullSpectrum ray_radiance = render_sky<FullSpectrum>(channel_idx, cos_theta, cos_gamma, true) * w_phi * w_cos_theta;
+                sky_radiance = dr::sum_inner(ray_radiance) * inv_J;
+            }
+
+            // Compute sun radiance over hemisphere
+            {
+                // Mapping for [-1, 1] x [-1, 1] -> [0, 2pi] x [cos(alpha/2), 1]
+                const Float inv_J = 0.5f * dr::Pi<ScalarFloat> * (1 - SUN_COS_CUTOFF);
+                Float phi = dr::Pi<Float> * (x + 1),
+                      cos_theta = 0.5f * ((1 - SUN_COS_CUTOFF) * x + (1 + SUN_COS_CUTOFF));
+
+                std::tie(phi, cos_theta) = dr::meshgrid(phi, cos_theta);
+                const auto [w_phi, w_cos_theta] = dr::meshgrid(w_x, w_x);
+
+                const auto sin_theta = dr::safe_sqrt(1 - dr::square(cos_theta));
+                const auto [sin_phi, cos_phi] = dr::sincos(phi);
+
+                // Construct vectors and transfer to world frame
+                Vector3f sun_wo {sin_theta * cos_phi, sin_theta * sin_phi, cos_theta};
+                         sun_wo = m_local_sun_frame.to_world(sun_wo);
+
+                cos_theta = Frame3f::cos_theta(sun_wo);
+                Float gamma = dr::unit_angle(m_sun_dir, sun_wo);
+
+                Mask active = cos_theta >= 0;
+                FullSpectrum ray_radiance = render_sun<FullSpectrum>(channel_idx, cos_theta, gamma, active) * w_phi * w_cos_theta;
+
+                // Apply sun limb darkening if not already
+                if constexpr (is_spectral_v<Spectrum>)
+                    ray_radiance *= compute_sun_ld<FullSpectrum>(channel_idx, channel_idx, 0.f, gamma, active);
+
+                sun_radiance = dr::sum_inner(ray_radiance) * inv_J;
+            }
+
+            // Extract luminance
+            Float sky_lum = m_sky_scale, sun_lum = m_sun_scale;
+            if constexpr (is_rgb_v<Spectrum>) {
+                sky_lum *= luminance(sky_radiance);
+                sun_lum *= luminance(sun_radiance) * 467.069280386;
+            } else {
+                sky_lum *= luminance(sky_radiance, c_wavelengths);
+                sun_lum *= luminance(sun_radiance, c_wavelengths);
+            }
+
+            // Normalize quantities for valid distribution
+            return sky_lum / (sky_lum + sun_lum);
+        }
+    }
+
     // ================================================================================================
     // ========================================= ATTRIBUTES ===========================================
     // ================================================================================================
@@ -610,14 +692,15 @@ private:
     /// Cosine of the sun's cutoff angle
     const Float SUN_COS_CUTOFF = (Float) dr::cos(SUN_HALF_APERTURE);
 
+    FullSpectrum c_wavelengths;
+
     Float m_surface_area;
     BoundingSphere3f m_bsphere;
 
     Float m_turbidity;
-    ScalarFloat m_sky_scale;
-    ScalarFloat m_sun_scale;
-    ScalarFloat m_sky_sampling_weight;
-    ScalarFloat m_sun_sampling_weight;
+    Float m_sky_scale;
+    Float m_sun_scale;
+    Float m_sky_sampling_w;
 
     ref<Texture> m_albedo;
 
