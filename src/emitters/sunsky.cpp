@@ -137,6 +137,8 @@ public:
         m_gaussian_distr = DiscreteDistribution<Float>(mis_weights);
 
         m_sky_sampling_w = estimate_sky_sun_ratio();
+        Log(Debug, "Sky sampling weight: %f", m_sky_sampling_w);
+
         // ================= GENERAL PARAMETERS =================
 
         /* Until `set_scene` is called, we have no information
@@ -190,7 +192,9 @@ public:
                      sun_rad_high = render_sun<Spectrum>(query_idx_high, cos_theta, gamma, hit_sun & valid_idx),
                      sun_rad = dr::lerp(sun_rad_low, sun_rad_high, lerp_factor);
 
-            Spectrum sun_ld = compute_sun_ld<Spectrum>(query_idx_low, query_idx_high, lerp_factor, gamma, hit_sun & valid_idx);
+            Spectrum sun_ld = 1.f;
+            if constexpr (is_spectral_v<Spectrum>)
+                sun_ld = compute_sun_ld<Spectrum>(query_idx_low, query_idx_high, lerp_factor, gamma, hit_sun & valid_idx);
 
             res += m_sun_scale * sun_rad * sun_ld;
 
@@ -211,6 +215,8 @@ public:
                 sample_sky({sample.x() / m_sky_sampling_w, sample.y()}, active),
                 sample_sun({(sample.x() - m_sky_sampling_w) / (1 - m_sky_sampling_w), sample.y()})
         );
+
+        active &= Frame3f::cos_theta(sample_dir) >= 0.f;
 
         // Automatically enlarge the bounding sphere when it does not contain the reference point
         Float radius = dr::maximum(m_bsphere.radius, dr::norm(it.p - m_bsphere.center)),
