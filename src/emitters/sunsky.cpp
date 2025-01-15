@@ -226,39 +226,32 @@ public:
 
         // Sample the sun or the sky
         const ScalarFloat boundary = m_sky_sampling_weight / (m_sky_sampling_weight + m_sun_sampling_weight);
-        auto [sample_dir, pdf] = dr::select(
+        const Vector3f sample_dir = dr::select(
                 sample.x() < boundary,
                 sample_sky({sample.x() / boundary, sample.y()}, active),
-                sample_sun({(sample.x() - boundary) / (1 - boundary), sample.y()})
+                warp::square_to_uniform_cone({(sample.x() - boundary) / (1 - boundary), sample.y()}, SUN_COS_CUTOFF)
         );
-
-        // Check for bounds on PDF
-        Float sin_theta = Frame3f::sin_theta(sample_dir);
-        active &= (Frame3f::cos_theta(sample_dir) >= 0.f) && (sin_theta != 0.f);
-        sin_theta = dr::maximum(sin_theta, SIN_OFFSET);
-
-        pdf = dr::select(active, pdf / sin_theta, 0.f);
 
         // Automatically enlarge the bounding sphere when it does not contain the reference point
         Float radius = dr::maximum(m_bsphere.radius, dr::norm(it.p - m_bsphere.center)),
               dist   = 2.f * radius;
 
+        SurfaceInteraction3f si = dr::zeros<SurfaceInteraction3f>();
+        si.wavelengths = it.wavelengths;
+
         Vector3f d = m_to_world.value().transform_affine(sample_dir);
-        DirectionSample3f ds;
+        DirectionSample3f ds = dr::zeros<DirectionSample3f>();
         ds.p       = dr::fmadd(d, dist, it.p);
         ds.n       = -d;
         ds.uv      = sample;
         ds.time    = it.time;
-        ds.pdf     = pdf;
         ds.delta   = false;
         ds.emitter = this;
         ds.d       = d;
         ds.dist    = dist;
+        ds.pdf     = pdf_direction(si, ds, active);
 
-        SurfaceInteraction3f si = dr::zeros<SurfaceInteraction3f>();
-        si.wavelengths = it.wavelengths;
-
-        return { ds, eval(si, active) / pdf };
+        return { ds, eval(si, active) / ds.pdf };
     }
 
     Float pdf_direction(const Interaction3f &, const DirectionSample3f &ds,
@@ -477,7 +470,7 @@ private:
      * @param active Mask for the active lanes
      * @return The sampled direction in the sky and its PDF
      */
-    std::pair<Vector3f, Float> sample_sky(Point2f sample, const Mask& active) const {
+    Vector3f sample_sky(Point2f sample, const Mask& active) const {
         // Sample a gaussian from the mixture
         const auto [idx, temp_sample] = m_gaussian_distr.sample_reuse(sample.x(), active);
 
@@ -504,7 +497,7 @@ private:
         // Clamp theta to avoid negative z-axis values (FP errors)
         angles.y() = dr::minimum(angles.y(), 0.5f * dr::Pi<Float> - dr::Epsilon<Float>);
 
-        return { to_spherical(angles), tgmm_pdf(angles, active) };
+        return m_to_world.value().transform_affine(to_spherical(angles));
     }
 
     std::pair<Vector3f, Float> sample_sun(const Point2f& sample) const {

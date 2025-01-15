@@ -110,7 +110,7 @@ def plot_some_radiance():
 
     for (err, rad), (t, _, _), (eta_str, gamma_str) in zip(res, params, param_str):
         err = err[0]
-        plt.plot(wavs, rad.numpy(), label=f'$t={t}$, $\eta={eta_str}$, $\gamma={gamma_str}$ MRE={err:.2e}')
+        plt.plot(wavs, rad.numpy(), label=fr'$t={t}$, $\eta={eta_str}$, $\gamma={gamma_str}$ MRE={err:.2e}')
 
 
     plt.plot(wavs, get_blackbody_rad(wavs).numpy(), label='Blackbody (5778K)')
