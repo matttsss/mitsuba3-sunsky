@@ -137,7 +137,10 @@ public:
         m_gaussian_distr = DiscreteDistribution<Float>(mis_weights);
 
         m_sky_sampling_w = estimate_sky_sun_ratio();
-        Log(Debug, "Sky sampling weight: %f", m_sky_sampling_w);
+
+
+        std::cout << "Sky sampling weight: " << m_sky_sampling_w << std::endl
+                  << "Angles: phi = " << m_sun_angles.x() << ", theta = " << m_sun_angles.y() << std::endl;
 
         // ================= GENERAL PARAMETERS =================
 
@@ -155,20 +158,19 @@ public:
         using SpecUInt32 = dr::uint32_array_t<Spectrum>;
         using SpecMask   = dr::mask_t<Spectrum>;
 
-        Vector3f local_wi = dr::normalize(m_to_world.value().inverse().transform_affine(si.wi));
-        Float cos_theta = Frame3f::cos_theta(-local_wi),
-              gamma = dr::unit_angle(m_sun_dir, -local_wi),
-              cos_gamma = Frame3f::cos_theta(m_local_sun_frame.to_local(-local_wi));
+        Vector3f local_wo = dr::normalize(m_to_world.value().inverse().transform_affine(-si.wi));
+        Float cos_theta = Frame3f::cos_theta(local_wo),
+              gamma = dr::unit_angle(Vector3f(m_local_sun_frame.n), local_wo);
 
         active &= cos_theta >= 0;
-        Mask hit_sun = active & (cos_gamma >= SUN_COS_CUTOFF);
+        Mask hit_sun = active & (gamma <= (Float) SUN_HALF_APERTURE);
 
         UnpolarizedSpectrum res = 0.f;
         if constexpr (is_rgb_v<Spectrum>) {
             // dr::width(idx) == 1
             const SpecUInt32 idx = SpecUInt32({0, 1, 2});
 
-            res = m_sky_scale * render_sky<Spectrum>(idx, cos_theta, cos_gamma, active);
+            res = m_sky_scale * render_sky<Spectrum>(idx, cos_theta, gamma, active);
             res += m_sun_scale * render_sun<Spectrum>(idx, cos_theta, gamma, hit_sun) * 467.069280386; // FIXME: explain this factor
 
             res *= MI_CIE_Y_NORMALIZATION;
@@ -184,8 +186,8 @@ public:
             const Spectrum lerp_factor = normalized_wavelengths - query_idx_low;
 
             res = m_sky_scale * dr::lerp(
-                render_sky<Spectrum>(query_idx_low, cos_theta, cos_gamma, active & valid_idx),
-                render_sky<Spectrum>(query_idx_high, cos_theta, cos_gamma, active & valid_idx),
+                render_sky<Spectrum>(query_idx_low, cos_theta, gamma, active & valid_idx),
+                render_sky<Spectrum>(query_idx_high, cos_theta, gamma, active & valid_idx),
                 lerp_factor);
 
             Spectrum sun_rad_low  = render_sun<Spectrum>(query_idx_low, cos_theta, gamma, hit_sun & valid_idx),
@@ -210,20 +212,18 @@ public:
         MI_MASKED_FUNCTION(ProfilerPhase::EndpointSampleDirection, active);
 
         // Sample the sun or the sky
-        const Vector3f sample_dir = dr::select(
+        Vector3f sample_dir = dr::select(
                 sample.x() < m_sky_sampling_w,
                 sample_sky({sample.x() / m_sky_sampling_w, sample.y()}, active),
                 sample_sun({(sample.x() - m_sky_sampling_w) / (1 - m_sky_sampling_w), sample.y()})
         );
 
+        //sample_dir = m_local_sun_frame.n;
         active &= Frame3f::cos_theta(sample_dir) >= 0.f;
 
         // Automatically enlarge the bounding sphere when it does not contain the reference point
         Float radius = dr::maximum(m_bsphere.radius, dr::norm(it.p - m_bsphere.center)),
               dist   = 2.f * radius;
-
-        SurfaceInteraction3f si = dr::zeros<SurfaceInteraction3f>();
-        si.wavelengths = it.wavelengths;
 
         Vector3f d = m_to_world.value().transform_affine(sample_dir);
         DirectionSample3f ds = dr::zeros<DirectionSample3f>();
@@ -235,6 +235,11 @@ public:
         ds.emitter = this;
         ds.d       = d;
         ds.dist    = dist;
+
+        SurfaceInteraction3f si = dr::zeros<SurfaceInteraction3f>();
+        si.wi = -d;
+        si.wavelengths = it.wavelengths;
+
         ds.pdf     = pdf_direction(si, ds, active);
 
         return { ds, eval(si, active) / ds.pdf };
@@ -352,16 +357,14 @@ private:
      *
      * @tparam Spec Spectral type to render (adapts the number of channels)
      * @param channel_idx Indices of the channels to render
-     * @param cos_theta Cosine of the angle between the z-axis (up) and the
-     * viewing direction
-     * @param cos_gamma Cosine of the angle between the sun and the viewing
-     * direction
+     * @param cos_theta Cosine of the angle between the z-axis (up) and the viewing direction
+     * @param gamma Angle between the sun and the viewing direction
      * @param active Mask for the active lanes and channel idx
      * @return The rendered sky radiance
      */
     template <typename Spec> Spec render_sky(
         const dr::uint32_array_t<Spec>& channel_idx,
-        const Float& cos_theta, const Float& cos_gamma,
+        const Float& cos_theta, const Float& gamma,
         const dr::mask_t<Spec>& active) const {
 
         // Gather coefficients for the skylight equation
@@ -372,7 +375,7 @@ private:
         using SpecSkyParams = dr::Array<Spec, NB_SKY_PARAMS>;
         SpecSkyParams coefs = dr::gather<SpecSkyParams>(m_sky_params, channel_idx, active);
 
-        Float gamma = dr::safe_acos(cos_gamma),
+        Float cos_gamma = dr::cos(gamma),
               cos_gamma_sqr = dr::square(cos_gamma);
 
         Spec c1 = 1 + coefs[0] * dr::exp(coefs[1] / (cos_theta + 0.01f));
@@ -648,9 +651,9 @@ private:
                 const auto sin_theta = dr::safe_sqrt(1 - dr::square(cos_theta));
 
                 Vector3f sky_wo {sin_theta * cos_phi, sin_theta * sin_phi, cos_theta};
-                Float cos_gamma = Frame3f::cos_theta(m_local_sun_frame.to_local(sky_wo));
+                Float gamma = dr::unit_angle(Vector3f(m_local_sun_frame.n), sky_wo);
 
-                FullSpectrum ray_radiance = render_sky<FullSpectrum>(channel_idx, cos_theta, cos_gamma, true) * w_phi * w_cos_theta;
+                FullSpectrum ray_radiance = render_sky<FullSpectrum>(channel_idx, cos_theta, gamma, true) * w_phi * w_cos_theta;
                 sky_radiance = dr::sum_inner(ray_radiance) * inv_J;
             }
 
@@ -659,20 +662,22 @@ private:
                 // Mapping for [-1, 1] x [-1, 1] -> [0, 2pi] x [cos(alpha/2), 1]
                 const Float inv_J = 0.5f * dr::Pi<ScalarFloat> * (1 - SUN_COS_CUTOFF);
                 Float phi = dr::Pi<Float> * (x + 1),
-                      cos_theta = 0.5f * ((1 - SUN_COS_CUTOFF) * x + (1 + SUN_COS_CUTOFF));
+                      cos_gamma = 0.5f * ((1 - SUN_COS_CUTOFF) * x + (1 + SUN_COS_CUTOFF));
 
-                std::tie(phi, cos_theta) = dr::meshgrid(phi, cos_theta);
+                std::tie(phi, cos_gamma) = dr::meshgrid(phi, cos_gamma);
                 const auto [w_phi, w_cos_theta] = dr::meshgrid(w_x, w_x);
 
-                const auto sin_theta = dr::safe_sqrt(1 - dr::square(cos_theta));
+                const auto sin_gamma = dr::safe_sqrt(1 - dr::square(cos_gamma));
                 const auto [sin_phi, cos_phi] = dr::sincos(phi);
 
-                // Construct vectors and transfer to world frame
-                Vector3f sun_wo {sin_theta * cos_phi, sin_theta * sin_phi, cos_theta};
-                         sun_wo = m_local_sun_frame.to_world(sun_wo);
+                // View ray in local sun coordinates
+                Vector3f sun_wo {sin_gamma * cos_phi, sin_gamma * sin_phi, cos_gamma};
+                Float gamma = dr::unit_angle_z(sun_wo);
 
-                cos_theta = Frame3f::cos_theta(sun_wo);
-                Float gamma = dr::unit_angle(m_sun_dir, sun_wo);
+                // View ray in local emitter coordinates
+                sun_wo = m_local_sun_frame.to_world(sun_wo);
+
+                Float cos_theta = Frame3f::cos_theta(sun_wo);
 
                 Mask active = cos_theta >= 0;
                 FullSpectrum ray_radiance = render_sun<FullSpectrum>(channel_idx, cos_theta, gamma, active) * w_phi * w_cos_theta;
