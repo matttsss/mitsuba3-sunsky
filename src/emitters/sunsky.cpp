@@ -152,7 +152,6 @@ public:
 
         using SpecUInt32 = dr::uint32_array_t<Spectrum>;
         using SpecMask   = dr::mask_t<Spectrum>;
-        using SpecLdArray = dr::Array<Spectrum, NB_SUN_LD_PARAMS>;
 
         Vector3f local_wi = dr::normalize(m_to_world.value().inverse().transform_affine(si.wi));
         Float cos_theta = Frame3f::cos_theta(-local_wi),
@@ -167,8 +166,8 @@ public:
             // dr::width(idx) == 1
             const SpecUInt32 idx = SpecUInt32({0, 1, 2});
 
-            res = m_sky_scale * render_sky(idx, cos_theta, cos_gamma, active);
-            res += m_sun_scale * render_sun<Spectrum>(idx, cos_theta, cos_gamma, hit_sun) * 467.069280386; // FIXME: explain this factor
+            res = m_sky_scale * render_sky<Spectrum>(idx, cos_theta, cos_gamma, active);
+            res += m_sun_scale * render_sun<Spectrum>(idx, cos_theta, gamma, hit_sun) * 467.069280386; // FIXME: explain this factor
 
             res *= MI_CIE_Y_NORMALIZATION;
 
@@ -183,33 +182,15 @@ public:
             const Spectrum lerp_factor = normalized_wavelengths - query_idx_low;
 
             res = m_sky_scale * dr::lerp(
-                render_sky(query_idx_low, cos_theta, cos_gamma, active & valid_idx),
-                render_sky(query_idx_high, cos_theta, cos_gamma, active & valid_idx),
+                render_sky<Spectrum>(query_idx_low, cos_theta, cos_gamma, active & valid_idx),
+                render_sky<Spectrum>(query_idx_high, cos_theta, cos_gamma, active & valid_idx),
                 lerp_factor);
 
-            Spectrum sun_rad_low  = render_sun<Spectrum>(query_idx_low, cos_theta, cos_gamma, hit_sun & valid_idx),
-                     sun_rad_high = render_sun<Spectrum>(query_idx_high, cos_theta, cos_gamma, hit_sun & valid_idx),
+            Spectrum sun_rad_low  = render_sun<Spectrum>(query_idx_low, cos_theta, gamma, hit_sun & valid_idx),
+                     sun_rad_high = render_sun<Spectrum>(query_idx_high, cos_theta, gamma, hit_sun & valid_idx),
                      sun_rad = dr::lerp(sun_rad_low, sun_rad_high, lerp_factor);
 
-            SpecLdArray sun_ld_low  = dr::gather<SpecLdArray>(m_sun_ld, query_idx_low, hit_sun & valid_idx),
-                        sun_ld_high = dr::gather<SpecLdArray>(m_sun_ld, query_idx_high, hit_sun & valid_idx),
-                        sun_ld_coefs = dr::lerp(sun_ld_low, sun_ld_high, lerp_factor);
-
-            // Angles computation
-            //Float64 sin_gamma_sqr      = dr::fnmadd(cos_gamma, cos_gamma, 1.f),
-            //      sin_sun_cutoff_sqr = dr::fnmadd(SUN_COS_CUTOFF, SUN_COS_CUTOFF, 1.f);
-            //Float64 cos_psi = dr::safe_sqrt(1 - sin_gamma_sqr / sin_sun_cutoff_sqr);
-
-            const Float64 sol_rad_sin = dr::sin(SUN_HALF_APERTURE);
-            const Float64 ar2 = 1 / ( sol_rad_sin * sol_rad_sin );
-            const Float64 singamma = dr::sin(gamma);
-            const Float64 sc2 = 1.0 - ar2 * singamma * singamma;
-            const Float cos_psi = dr::safe_sqrt(sc2);
-
-            Spectrum sun_ld = 0.f;
-            for (uint8_t j = 0; j < NB_SUN_LD_PARAMS; ++j)
-                sun_ld += dr::pow(cos_psi, j) * sun_ld_coefs[j];
-
+            Spectrum sun_ld = compute_sun_ld<Spectrum>(query_idx_low, query_idx_high, lerp_factor, gamma, hit_sun & valid_idx);
 
             res += m_sun_scale * sun_rad * sun_ld;
 
@@ -364,6 +345,7 @@ private:
      * Based on the Hosek-Wilkie skylight model
      * https://cgg.mff.cuni.cz/projects/SkylightModelling/HosekWilkie_SkylightModel_SIGGRAPH2012_Preprint_lowres.pdf
      *
+     * @tparam Spec Spectral type to render (adapts the number of channels)
      * @param channel_idx Indices of the channels to render
      * @param cos_theta Cosine of the angle between the z-axis (up) and the
      * viewing direction
@@ -372,24 +354,27 @@ private:
      * @param active Mask for the active lanes and channel idx
      * @return The rendered sky radiance
      */
-    Spectrum render_sky(
-        const dr::uint32_array_t<Spectrum>& channel_idx,
+    template <typename Spec> Spec render_sky(
+        const dr::uint32_array_t<Spec>& channel_idx,
         const Float& cos_theta, const Float& cos_gamma,
-        const dr::mask_t<Spectrum>& active) const {
+        const dr::mask_t<Spec>& active) const {
 
         // Gather coefficients for the skylight equation
-        Spectrum coefs[NB_SKY_PARAMS];
-        for (uint8_t i = 0; i < NB_SKY_PARAMS; ++i)
-            coefs[i] = dr::gather<Spectrum>(m_sky_params, channel_idx * NB_SKY_PARAMS + i, active);
+        //Spec coefs[NB_SKY_PARAMS];
+        //for (uint8_t i = 0; i < NB_SKY_PARAMS; ++i)
+        //    coefs[i] = dr::gather<Spec>(m_sky_params, channel_idx * NB_SKY_PARAMS + i, active);
+
+        using SpecSkyParams = dr::Array<Spec, NB_SKY_PARAMS>;
+        SpecSkyParams coefs = dr::gather<SpecSkyParams>(m_sky_params, channel_idx, active);
 
         Float gamma = dr::safe_acos(cos_gamma),
               cos_gamma_sqr = dr::square(cos_gamma);
 
-        Spectrum c1 = 1 + coefs[0] * dr::exp(coefs[1] / (cos_theta + 0.01f));
-        Spectrum chi = (1 + cos_gamma_sqr) / dr::pow(1 + dr::square(coefs[8]) - 2 * coefs[8] * cos_gamma, 1.5);
-        Spectrum c2 = coefs[2] + coefs[3] * dr::exp(coefs[4] * gamma) + coefs[5] * cos_gamma_sqr + coefs[6] * chi + coefs[7] * dr::safe_sqrt(cos_theta);
+        Spec c1 = 1 + coefs[0] * dr::exp(coefs[1] / (cos_theta + 0.01f));
+        Spec chi = (1 + cos_gamma_sqr) / dr::pow(1 + dr::square(coefs[8]) - 2 * coefs[8] * cos_gamma, 1.5);
+        Spec c2 = coefs[2] + coefs[3] * dr::exp(coefs[4] * gamma) + coefs[5] * cos_gamma_sqr + coefs[6] * chi + coefs[7] * dr::safe_sqrt(cos_theta);
 
-        return c1 * c2 * dr::gather<Spectrum>(m_sky_radiance, channel_idx, active);
+        return c1 * c2 * dr::gather<Spec>(m_sky_radiance, channel_idx, active);
     }
 
    /**
@@ -403,14 +388,13 @@ private:
     * @tparam Spec Spectral type to render (adapts the number of channels)
     * @param channel_idx Indices of the channels to render
     * @param cos_theta Cosine of the angle between the z-axis (up) and the viewing direction
-    * @param cos_gamma Cosine of the angle between the sun and the viewing direction
+    * @param gamma Angle between the sun and the viewing direction
     * @param active Mask for the active lanes and channel idx
     * @return The rendered sun radiance
     */
-    template <typename Spec>
-    Spec render_sun(
+    template <typename Spec> Spec render_sun(
         const dr::uint32_array_t<Spec>& channel_idx,
-        const Float& cos_theta, const Float& cos_gamma,
+        const Float& cos_theta, const Float& gamma,
         const dr::mask_t<Spec>& active) const {
 
         using SpecUInt32 = dr::uint32_array_t<Spec>;
@@ -427,7 +411,7 @@ private:
 
         Spec solar_radiance = 0.f;
         if constexpr (is_spectral_v<Spec>) {
-            DRJIT_MARK_USED(cos_gamma);
+            DRJIT_MARK_USED(gamma);
             // Compute sun radiance
             SpecUInt32 global_idx = pos * NB_WAVELENGTHS * NB_SUN_CTRL_PTS + channel_idx * NB_SUN_CTRL_PTS;
             for (uint8_t k = 0; k < NB_SUN_CTRL_PTS; ++k)
@@ -437,9 +421,16 @@ private:
             // Reproduces the spectral equation above but distributes the product of sums
             // since it uses interpolated coefficients from the spectral dataset
 
-            Float sin_gamma_sqr      = dr::fnmadd(cos_gamma, cos_gamma, 1.f),
-                  sin_sun_cutoff_sqr = dr::fnmadd(SUN_COS_CUTOFF, SUN_COS_CUTOFF, 1.f);
-            Float cos_psi = dr::safe_sqrt(1 - sin_gamma_sqr / sin_sun_cutoff_sqr);
+            // Angles computation
+            //Float64 sin_gamma_sqr      = dr::fnmadd(cos_gamma, cos_gamma, 1.f),
+            //      sin_sun_cutoff_sqr = dr::fnmadd(SUN_COS_CUTOFF, SUN_COS_CUTOFF, 1.f);
+            //Float64 cos_psi = dr::safe_sqrt(1 - sin_gamma_sqr / sin_sun_cutoff_sqr);
+
+            const Float64 sol_rad_sin = dr::sin(SUN_HALF_APERTURE);
+            const Float64 ar2 = 1 / ( sol_rad_sin * sol_rad_sin );
+            const Float64 singamma = dr::sin(gamma);
+            const Float64 sc2 = 1.0 - ar2 * singamma * singamma;
+            const Float cos_psi = dr::safe_sqrt(sc2);
 
             SpecUInt32 global_idx = pos * (3 * NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS) +
                                     channel_idx * (NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS);
@@ -454,6 +445,36 @@ private:
 
         return solar_radiance & active;
 
+    }
+
+    template<typename Spec> Spec compute_sun_ld(
+            const dr::uint32_array_t<Spec>& channel_idx_low,
+            const dr::uint32_array_t<Spec>& channel_idx_high,
+            const Spec& lerp_f, const Float& gamma,
+            const dr::mask_t<Spec>& active) const {
+
+        using SpecLdArray = dr::Array<Spec, NB_SUN_LD_PARAMS>;
+
+        SpecLdArray sun_ld_low  = dr::gather<SpecLdArray>(m_sun_ld, channel_idx_low, active),
+                    sun_ld_high = dr::gather<SpecLdArray>(m_sun_ld, channel_idx_high, active),
+                    sun_ld_coefs = dr::lerp(sun_ld_low, sun_ld_high, lerp_f);
+
+        // Angles computation
+        //Float64 sin_gamma_sqr      = dr::fnmadd(cos_gamma, cos_gamma, 1.f),
+        //        sin_sun_cutoff_sqr = dr::fnmadd(SUN_COS_CUTOFF, SUN_COS_CUTOFF, 1.f);
+        //Float64 cos_psi = dr::safe_sqrt(1 - sin_gamma_sqr / sin_sun_cutoff_sqr);
+
+        const Float64 sol_rad_sin = dr::sin(SUN_HALF_APERTURE);
+        const Float64 ar2 = 1 / ( sol_rad_sin * sol_rad_sin );
+        const Float64 singamma = dr::sin(gamma);
+        const Float64 sc2 = 1.0 - ar2 * singamma * singamma;
+        const Float cos_psi = dr::safe_sqrt(sc2);
+
+        Spec sun_ld = 0.f;
+        for (uint8_t j = 0; j < NB_SUN_LD_PARAMS; ++j)
+            sun_ld += dr::pow(cos_psi, j) * sun_ld_coefs[j];
+
+        return sun_ld & active;
     }
 
     MI_INLINE Point2f gaussian_cdf(const Point2f& mu, const Point2f& sigma, const Point2f& x) const {

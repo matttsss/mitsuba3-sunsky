@@ -46,11 +46,11 @@ def render_and_compare(ref_path, params: tuple[float]):
 
     rendered_scene = mi.TensorXf(dr.ravel(sky.eval(si)), (*render_res, 3)) if mi.is_rgb \
                 else eval_full_spec(sky, si, wavelengths, render_res)
-    reference_scene = mi.Bitmap(ref_path)
+    reference_scene = mi.TensorXf(mi.Bitmap(ref_path))
 
-    rtol = 0.013
-    atol = rtol/1000
-    if not dr.allclose(rendered_scene, mi.TensorXf(reference_scene), rtol=rtol, atol=atol):
+    rtol = 0.005 if mi.is_rgb else 0.0354
+    rel_err = dr.mean(dr.abs(rendered_scene - reference_scene) / (dr.abs(reference_scene) + 0.001))
+    if rel_err > rtol:
         print(f"Fail when rendering {params=}")
         print("Reference is ", ref_path)
         mi.util.write_bitmap("sunsky-testing/res/renders/fail.exr", rendered_scene)

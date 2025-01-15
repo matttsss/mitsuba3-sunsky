@@ -9,14 +9,15 @@ import mitsuba as mi
 from render_sky_scene import render_scene
 
 def eval_full_spec(plugin, si, wavelengths, render_res = (512, 1024)):
+    nb_channels = len(wavelengths)
 
-    output_image = dr.zeros(mi.Float, render_res[0] * render_res[1] * 10)
+    output_image = dr.zeros(mi.Float, render_res[0] * render_res[1] * nb_channels)
     for i, lbda in enumerate(wavelengths):
         si.wavelengths = lbda
         res = plugin.eval(si)[0]
-        dr.scatter(output_image, res, i + 10 * dr.arange(mi.UInt32, render_res[0] * render_res[1]))
+        dr.scatter(output_image, res, i + nb_channels * dr.arange(mi.UInt32, render_res[0] * render_res[1]))
 
-    return mi.TensorXf(output_image, (*render_res, 10))
+    return mi.TensorXf(output_image, (*render_res, nb_channels))
 
 def test_spectral_constants():
 
