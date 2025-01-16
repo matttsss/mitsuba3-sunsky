@@ -240,14 +240,7 @@ public:
         si.wi = -d;
         si.wavelengths = it.wavelengths;
 
-        // Check for bounds on PDF
-        Float sin_theta = Frame3f::sin_theta(sample_dir);
-        active &= (Frame3f::cos_theta(sample_dir) >= 0.f) && (sin_theta != 0.f);
-        sin_theta = dr::maximum(sin_theta, SIN_OFFSET);
-
-        Float sky_pdf = tgmm_pdf(from_spherical(sample_dir), active) / sin_theta,
-              sun_pdf = warp::square_to_uniform_cone_pdf(m_local_sun_frame.to_local(sample_dir), SUN_COS_CUTOFF);
-              sun_pdf = dr::select(!pick_sky || (dr::dot(m_local_sun_frame.n, sample_dir) >= SUN_COS_CUTOFF), sun_pdf, 0.f);
+        auto [sky_pdf, sun_pdf] = compute_pdfs(sample_dir, !pick_sky, active);
 
         ds.pdf = dr::lerp(sun_pdf, sky_pdf, m_sky_sampling_w);
 
@@ -260,18 +253,9 @@ public:
         MI_MASKED_FUNCTION(ProfilerPhase::EndpointEvaluate, active);
 
         Vector3f local_dir = m_to_world.value().inverse().transform_affine(ds.d);
-
-        // Check for bounds on PDF
-        Float sin_theta = Frame3f::sin_theta(local_dir);
-        active &= (Frame3f::cos_theta(local_dir) >= 0.f) && (sin_theta != 0.f);
-        sin_theta = dr::maximum(sin_theta, SIN_OFFSET);
-
-        Float sky_pdf = tgmm_pdf(from_spherical(local_dir), active) / sin_theta,
-              sun_pdf = warp::square_to_uniform_cone_pdf(m_local_sun_frame.to_local(local_dir), SUN_COS_CUTOFF);
-              sun_pdf = dr::select(dr::dot(m_local_sun_frame.n, local_dir) >= SUN_COS_CUTOFF, sun_pdf, 0.f);
+        const auto [sky_pdf, sun_pdf] = compute_pdfs(local_dir, true, active);
 
         Float combined_pdf = dr::lerp(sun_pdf, sky_pdf, m_sky_sampling_w);
-
         return dr::select(active, combined_pdf, 0.f);
     }
 
@@ -442,7 +426,7 @@ private:
 
             // Angles computation
             //Float64 sin_gamma_sqr      = dr::fnmadd(cos_gamma, cos_gamma, 1.f),
-            //      sin_sun_cutoff_sqr = dr::fnmadd(SUN_COS_CUTOFF, SUN_COS_CUTOFF, 1.f);
+            //        sin_sun_cutoff_sqr = dr::fnmadd(SUN_COS_CUTOFF, SUN_COS_CUTOFF, 1.f);
             //Float64 cos_psi = dr::safe_sqrt(1 - sin_gamma_sqr / sin_sun_cutoff_sqr);
 
             const Float64 sol_rad_sin = dr::sin(SUN_HALF_APERTURE);
@@ -515,7 +499,6 @@ private:
         return 0.5f * (1 + dr::erf(dr::InvSqrtTwo<Float> * (x - mu) / sigma));
     }
 
-
     /**
      * Samples the sky from the truncated gaussian mixture with the given sample
      * Based on the Truncated Gaussian Mixture Model (TGMM) for sky dome by N. Vitsas and K. Vardis
@@ -556,12 +539,30 @@ private:
     }
 
     Vector3f sample_sun(const Point2f& sample) const {
-        // Needs an offset with regard to warp::square_to_uniform_cone_pdf to avoid rejection by pdf method
-        // TODO decide
-        //return m_local_sun_frame.n;
         return m_local_sun_frame.to_world(
             warp::square_to_uniform_cone(sample, SUN_COS_CUTOFF)
         );
+    }
+
+    /**
+     * Computes the PDFs of the sky and sun for the given local direction
+     *
+     * @param local_dir Local direction in the sky
+     * @param check_sun Indicates if the sun's intersection should be tested
+     * @param active Mask for the active lanes
+     * @return The sky and sun PDFs
+     */
+    std::pair<Float, Float> compute_pdfs(const Vector3f& local_dir, const Mask& check_sun, Mask active) const {
+        // Check for bounds on PDF
+        Float sin_theta = Frame3f::sin_theta(local_dir);
+        active &= (Frame3f::cos_theta(local_dir) >= 0.f) && (sin_theta != 0.f);
+        sin_theta = dr::maximum(sin_theta, SIN_OFFSET);
+
+        Float sky_pdf = tgmm_pdf(from_spherical(local_dir), active) / sin_theta,
+              sun_pdf = warp::square_to_uniform_cone_pdf(m_local_sun_frame.to_local(local_dir), SUN_COS_CUTOFF);
+              sun_pdf = dr::select(!check_sun || dr::dot(m_local_sun_frame.n, local_dir) >= SUN_COS_CUTOFF, sun_pdf, 0.f);
+
+        return {sky_pdf, sun_pdf};
     }
 
     Float tgmm_pdf(Point2f angles, Mask active) const {
