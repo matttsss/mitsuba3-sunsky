@@ -156,12 +156,12 @@ public:
         using SpecUInt32 = dr::uint32_array_t<Spectrum>;
         using SpecMask   = dr::mask_t<Spectrum>;
 
-        Vector3f local_wo = dr::normalize(m_to_world.value().inverse().transform_affine(-si.wi));
+        Vector3f local_wo = m_to_world.value().inverse().transform_affine(-si.wi);
         Float cos_theta = Frame3f::cos_theta(local_wo),
               gamma = dr::unit_angle(Vector3f(m_local_sun_frame.n), local_wo);
 
         active &= cos_theta >= 0;
-        Mask hit_sun = active & (gamma <= (Float) SUN_HALF_APERTURE);
+        Mask hit_sun = active & (dr::dot(m_local_sun_frame.n, local_wo) >= SUN_COS_CUTOFF);
 
         UnpolarizedSpectrum res = 0.f;
         if constexpr (is_rgb_v<Spectrum>) {
@@ -209,9 +209,11 @@ public:
                                                             Mask active) const override {
         MI_MASKED_FUNCTION(ProfilerPhase::EndpointSampleDirection, active);
 
+        const Mask pick_sky = sample.x() < m_sky_sampling_w;
+
         // Sample the sun or the sky
         Vector3f sample_dir = dr::select(
-                sample.x() < m_sky_sampling_w,
+                pick_sky,
                 sample_sky({sample.x() / m_sky_sampling_w, sample.y()}, active),
                 sample_sun({(sample.x() - m_sky_sampling_w) / (1 - m_sky_sampling_w), sample.y()})
         );
@@ -238,25 +240,35 @@ public:
         si.wi = -d;
         si.wavelengths = it.wavelengths;
 
-        ds.pdf     = pdf_direction(si, ds, active);
+        // Check for bounds on PDF
+        Float sin_theta = Frame3f::sin_theta(sample_dir);
+        active &= (Frame3f::cos_theta(sample_dir) >= 0.f) && (sin_theta != 0.f);
+        sin_theta = dr::maximum(sin_theta, SIN_OFFSET);
 
-        active &= ds.pdf > 0.f;
-        return { ds, eval(si, active) / ds.pdf };
+        Float sky_pdf = tgmm_pdf(from_spherical(sample_dir), active) / sin_theta,
+              sun_pdf = warp::square_to_uniform_cone_pdf(m_local_sun_frame.to_local(sample_dir), SUN_COS_CUTOFF);
+              sun_pdf = dr::select(!pick_sky || (dr::dot(m_local_sun_frame.n, sample_dir) >= SUN_COS_CUTOFF), sun_pdf, 0.f);
+
+        ds.pdf = dr::lerp(sun_pdf, sky_pdf, m_sky_sampling_w);
+
+        Spectrum res = eval(si, active) / ds.pdf;
+                 res = dr::select(dr::isfinite(res), res, 0.f);
+        return { ds, res };
     }
 
-    Float pdf_direction(const Interaction3f &, const DirectionSample3f &ds,
-                        Mask active) const override {
+    Float pdf_direction(const Interaction3f &, const DirectionSample3f &ds, Mask active) const override {
         MI_MASKED_FUNCTION(ProfilerPhase::EndpointEvaluate, active);
 
-        Vector3f local_dir = dr::normalize(m_to_world.value().inverse().transform_affine(ds.d));
+        Vector3f local_dir = m_to_world.value().inverse().transform_affine(ds.d);
 
         // Check for bounds on PDF
         Float sin_theta = Frame3f::sin_theta(local_dir);
         active &= (Frame3f::cos_theta(local_dir) >= 0.f) && (sin_theta != 0.f);
         sin_theta = dr::maximum(sin_theta, SIN_OFFSET);
 
-        Float sun_pdf = warp::square_to_uniform_cone_pdf<true>(m_local_sun_frame.to_local(local_dir), SUN_COS_CUTOFF);
-        Float sky_pdf = tgmm_pdf(from_spherical(local_dir), active) / sin_theta;
+        Float sky_pdf = tgmm_pdf(from_spherical(local_dir), active) / sin_theta,
+              sun_pdf = warp::square_to_uniform_cone_pdf(m_local_sun_frame.to_local(local_dir), SUN_COS_CUTOFF);
+              sun_pdf = dr::select(dr::dot(m_local_sun_frame.n, local_dir) >= SUN_COS_CUTOFF, sun_pdf, 0.f);
 
         Float combined_pdf = dr::lerp(sun_pdf, sky_pdf, m_sky_sampling_w);
 
@@ -546,10 +558,10 @@ private:
     Vector3f sample_sun(const Point2f& sample) const {
         // Needs an offset with regard to warp::square_to_uniform_cone_pdf to avoid rejection by pdf method
         // TODO decide
-        return m_local_sun_frame.n;
-        //return m_local_sun_frame.to_world(
-        //    warp::square_to_uniform_cone(sample, SUN_COS_CUTOFF + 1.f * dr::Epsilon<Float>)
-        //);
+        //return m_local_sun_frame.n;
+        return m_local_sun_frame.to_world(
+            warp::square_to_uniform_cone(sample, SUN_COS_CUTOFF)
+        );
     }
 
     Float tgmm_pdf(Point2f angles, Mask active) const {

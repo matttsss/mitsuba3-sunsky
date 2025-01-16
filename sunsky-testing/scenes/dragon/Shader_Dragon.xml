@@ -12,7 +12,7 @@
 		<float name="near_clip" value="0.1"/>
 		<float name="far_clip" value="50000.0"/>
 		<transform name="to_world">
-			<lookat origin="1, 2, 20" target="0.0, 1.5, 0.5" up="0, 1, 0"/>
+			<lookat origin="-12, 1, 15" target="0.0, 1.5, 0.5" up="0, 1, 0"/>
 		</transform>
 		<film type="hdrfilm">
 			<integer name="width" value="1920"/>
@@ -26,7 +26,7 @@
 		<!--rgb name="albedo" value="0.5,1.0,0.0"/-->
 		<float name="sky_scale" value="1.0"/>
 		<float name="sun_scale" value="1.0"/>
-		<vector name="sun_direction" value="0.5, 0.05, 0.5"/>
+		<vector name="sun_direction" value="1.5, 0.1, 0.5"/>
 		<transform name="to_world">
 			<rotate x="1" angle="-90"/>
 		</transform>
