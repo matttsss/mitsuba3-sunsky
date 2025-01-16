@@ -1,0 +1,58 @@
+<scene version="3.0.0">
+	<!--integrator type="direct">
+		<integer name="emitter_samples" value="1"/>
+		<integer name="bsdf_samples" value="1"/>
+	</integrator-->
+	<integrator type="path"/>
+
+	<sampler type="independent"/>
+
+	<sensor type="perspective">
+		<float name="fov" value="30"/>
+		<float name="near_clip" value="0.1"/>
+		<float name="far_clip" value="50000.0"/>
+		<transform name="to_world">
+			<lookat origin="1, 2, 20" target="0.0, 1.5, 0.5" up="0, 1, 0"/>
+		</transform>
+		<film type="hdrfilm">
+			<integer name="width" value="1920"/>
+			<integer name="height" value="1080"/>
+		</film>
+	</sensor>
+
+	<emitter type="sunsky">
+		<float name="turbidity" value="5.2"/>
+		<float name="albedo" value="0.56"/>
+		<!--rgb name="albedo" value="0.5,1.0,0.0"/-->
+		<float name="sky_scale" value="1.0"/>
+		<float name="sun_scale" value="1.0"/>
+		<vector name="sun_direction" value="0.5, 0.05, 0.5"/>
+		<transform name="to_world">
+			<rotate x="1" angle="-90"/>
+		</transform>
+	</emitter>
+
+	<!--shape type="sphere">
+		<vector name="center" value="3.0, 0.5, 2"/>
+		<bsdf type="conductor">
+			<string name="material" value="none"/>
+		</bsdf>
+	</shape-->
+
+	<shape type="obj">
+		<string name="filename" value="meshes/Dragon.obj"/>
+		<bsdf type="roughplastic">
+			<string name="distribution" value="beckmann"/>
+			<rgb name="diffuse_reflectance" value="0.4, 0.4, 0.2"/>
+			<float name="alpha" value="0.08"/>
+		</bsdf>
+	</shape>
+
+	<shape type="obj">
+		<string name="filename" value="meshes/Plane.obj"/>
+		<bsdf type="diffuse">
+			<rgb name="reflectance" value="0.9,0.9,0.9"/>
+		</bsdf>
+	</shape>
+
+</scene>

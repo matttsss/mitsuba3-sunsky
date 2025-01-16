@@ -138,9 +138,7 @@ public:
 
         m_sky_sampling_w = estimate_sky_sun_ratio();
 
-
-        std::cout << "Sky sampling weight: " << m_sky_sampling_w << std::endl
-                  << "Angles: phi = " << m_sun_angles.x() << ", theta = " << m_sun_angles.y() << std::endl;
+        std::cout << "Sky sampling weight: " << m_sky_sampling_w << std::endl;
 
         // ================= GENERAL PARAMETERS =================
 
@@ -242,6 +240,7 @@ public:
 
         ds.pdf     = pdf_direction(si, ds, active);
 
+        active &= ds.pdf > 0.f;
         return { ds, eval(si, active) / ds.pdf };
     }
 
@@ -259,7 +258,7 @@ public:
         Float sun_pdf = warp::square_to_uniform_cone_pdf<true>(m_local_sun_frame.to_local(local_dir), SUN_COS_CUTOFF);
         Float sky_pdf = tgmm_pdf(from_spherical(local_dir), active) / sin_theta;
 
-        Float combined_pdf = m_sky_sampling_w * sky_pdf + (1 - m_sky_sampling_w) * sun_pdf;
+        Float combined_pdf = dr::lerp(sun_pdf, sky_pdf, m_sky_sampling_w);
 
         return dr::select(active, combined_pdf, 0.f);
     }
@@ -545,8 +544,12 @@ private:
     }
 
     Vector3f sample_sun(const Point2f& sample) const {
-        Vector3f sun_sample = warp::square_to_uniform_cone(sample, SUN_COS_CUTOFF);
-        return m_local_sun_frame.to_world(sun_sample);
+        // Needs an offset with regard to warp::square_to_uniform_cone_pdf to avoid rejection by pdf method
+        // TODO decide
+        return m_local_sun_frame.n;
+        //return m_local_sun_frame.to_world(
+        //    warp::square_to_uniform_cone(sample, SUN_COS_CUTOFF + 1.f * dr::Epsilon<Float>)
+        //);
     }
 
     Float tgmm_pdf(Point2f angles, Mask active) const {
