@@ -5,8 +5,18 @@ Being an experimental research framework, Mitsuba 3 does not strictly follow the
 `Semantic Versioning <https://semver.org/>`_ convention. That said, we will
 strive to document breaking API changes in the release notes below.
 
-Incoming changes
------------------
+Mitsuba 3.6.2
+-------------
+*January 16, 2025*
+
+- Enable parallel scene loading by default in ``mitsuba`` CLI (regression)
+  `[338898d] <https://github.com/mitsuba-renderer/mitsuba3/commit/338898dcf7b26d70523f22a58d4ac474a6cf8e5c>`_
+- Improved ``bitmap`` construction in scalar variants
+  `[6af4d37] <https://github.com/mitsuba-renderer/mitsuba3/commit/6af4d377c52bc13b7cafa24cd17b96d68b898f87>`_
+
+Mitsuba 3.6.1
+-------------
+*January 16, 2025*
 
 - Improve robustness of parallel scene loading
   `[8d48f58] <https://github.com/mitsuba-renderer/mitsuba3/commit/8d48f585f07c6559d9aa346507b5e0c007c02513>`_
@@ -16,6 +26,8 @@ Incoming changes
   `[eff5bf6] <https://github.com/mitsuba-renderer/mitsuba3/commit/eff5bf6eae8cc5448af0193f7be0d0cdbf9c41d2>`_
 - Improved error message when ``mi.load_dict`` fails
   `[7db5401] <https://github.com/mitsuba-renderer/mitsuba3/commit/7db5401dcdbdcee70fd28b0736313f1365f279f8>`_
+- Add missing implementations for `spot` emitter (for AD)
+  `[9336491] <https://github.com/mitsuba-renderer/mitsuba3/commit/933649143dbce3086cb6316a9ee928d29c9053b5>`_
 
 Mitsuba 3.6.0
 -------------
