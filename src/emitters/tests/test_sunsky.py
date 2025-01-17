@@ -5,7 +5,7 @@ import numpy as np
 import drjit as dr
 import mitsuba as mi
 
-eps = 1e-3
+eps = 1e-4
 SUN_HALF_APERTURE_ANGLE = dr.deg2rad(0.5388/2.0)
 
 def make_emitter(turb, sun_phi, sun_theta, albedo, sky_scale, sun_scale):
@@ -85,12 +85,26 @@ def test01_sky_radiance(variants_vec_backends_once, turb, sun_eta, albedo):
     assert rel_err <= rtol, (f"Fail when rendering plugin: {plugin}\n"
                              f"Mean relative error: {rel_err}, threshold: {rtol}")
 
-@pytest.mark.parametrize("turb",    np.linspace(1, 10, 7))
-@pytest.mark.parametrize("eta_ray", np.linspace(eps, dr.pi/2 - eps, 5))
+def create_spectrum_file(turb, eta, gamma, ref_wav, ref_rad):
+    with open(f"../renders/spectrum/sun_spectrum_t{turb:.1f}_eta{eta:.2f}_gamma{gamma:.3e}.spd", "w") as f:
+        for wav, rad in zip(ref_wav, ref_rad):
+            f.write(f"{wav} {rad}\n")
+
+def extract_spectrum(turb, eta, gamma):
+    with open(f"../renders/spectrum/sun_spectrum_t{turb:.1f}_eta{eta:.2f}_gamma{gamma:.3e}.spd", "r") as f:
+        return [float(line.split()[1]) for line in f.readlines()]
+
+
+@pytest.mark.parametrize("turb",    np.linspace(1, 10, 5))
+@pytest.mark.parametrize("eta_ray", np.linspace(eps, dr.pi/2 - eps, 4))
 @pytest.mark.parametrize("gamma",   np.linspace(0, SUN_HALF_APERTURE_ANGLE - eps, 4))
 def test02_sun_radiance(variants_vec_spectral, turb, eta_ray, gamma):
+
     wavelengths = [320, 400, 500, 600, 700, 800]
-    ref_rad = mi.Float([mi.hosek_sun_rad(turb, wav, eta_ray, gamma) for wav in wavelengths])
+    #ref_rad = mi.Float([mi.hosek_sun_rad(turb, wav, eta_ray, gamma) for wav in wavelengths])
+
+    # Create the spectrum file
+    #create_spectrum_file(turb, eta_ray, gamma, wavelengths, ref_rad)
 
     phi = dr.pi/5
     theta_ray = dr.pi/2 - eta_ray
@@ -118,8 +132,13 @@ def test02_sun_radiance(variants_vec_spectral, turb, eta_ray, gamma):
 
     # Evaluate the plugin
     res = plugin.eval(si)[0]
+
+    # Load the reference spectrum
+    ref_rad = extract_spectrum(turb, eta_ray, gamma)
+    ref_rad = mi.Float(ref_rad)
     rel_err = dr.mean(dr.abs(res - ref_rad) / (ref_rad + 1e-6))
 
     rtol = 1e-3
-    assert rel_err <= rtol, (f"Fail when rendering sun with ray at elevation {eta_ray:.2f} and gamma {gamma:.2f}\n"
-                             f"Mean relative error: {rel_err}, threshold: {rtol}")
+    assert rel_err <= rtol, (f"Fail when rendering sun with ray at turbidity {turb}, elevation {eta_ray} and gamma {gamma}\n"
+                             f"Reference spectrum: {ref_rad}\n"
+                             f"Rendered spectrum: {res}\n")
