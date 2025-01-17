@@ -4,11 +4,7 @@ sys.path.insert(0, "build/python")
 import drjit as dr
 import mitsuba as mi
 
-mi.set_variant("cuda_ad_rgb")
-
-from rendering.sunsky_plugin import SunskyEmitter
-
-def test_sampling():
+def check_sampling():
     t, a = 6, 0.5
     eta = dr.deg2rad(50.2)
     phi_sun = -4*dr.pi/5
@@ -20,10 +16,8 @@ def test_sampling():
     sp_sun, cp_sun = dr.sincos(phi_sun)
     st, ct = dr.sincos(dr.pi/2 - eta)
 
-    plugin_name = "sunsky"
-
     sky = {
-        "type": plugin_name,
+        "type": "sunsky",
         "sun_direction": [cp_sun * st, sp_sun * st, ct],
         "sun_scale": 0.0,
         "turbidity": t,
@@ -51,7 +45,7 @@ def test_sampling():
     dr.print("Problematic samples: {samples}\n", samples=problematic_samples)
 
 
-    sample_func, pdf_func = mi.chi2.EmitterAdapter(plugin_name, sky)
+    sample_func, pdf_func = mi.chi2.EmitterAdapter("sunsky", sky)
     test = mi.chi2.ChiSquareTest(
         domain=mi.chi2.SphericalDomain(),
         pdf_func= pdf_func,
@@ -66,5 +60,7 @@ def test_sampling():
 
 
 if __name__ == "__main__":
-    test_sampling()
+    mi.set_variant("cuda_ad_rgb")
+
+    check_sampling()
 

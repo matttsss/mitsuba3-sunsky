@@ -6,20 +6,9 @@ import itertools
 import drjit as dr
 import mitsuba as mi
 
-mi.set_variant("cuda_ad_spectral")
-
-from spectral_render_test import eval_full_spec
-
-
-HALF_PI = dr.pi/2
-sun_phi = 0
-sp_sun, cp_sun = dr.sincos(sun_phi)
-
-start, end = 360, 830
-step = (end - start) / 10
-wavelengths = [start + step/2 + i*step for i in range(10)]
-
 def render_and_compare(ref_path, params: tuple[float]):
+    from spectral_render_test import eval_full_spec
+
     global sp_sun, cp_sun
     sun_theta = HALF_PI - params[0]
     st, ct = dr.sincos(sun_theta)
@@ -59,8 +48,17 @@ def render_and_compare(ref_path, params: tuple[float]):
     dr.print("Pass when rendering t={t}, a={a}, eta={eta}", t= params[1], a=params[2], eta=params[0])
 
 
+if __name__ == "__main__":
+    mi.set_variant("cuda_ad_spectral")
 
-def tests():
+    HALF_PI = dr.pi/2
+    sun_phi = 0
+    sp_sun, cp_sun = dr.sincos(sun_phi)
+
+    start, end = 360, 830
+    step = (end - start) / 10
+    wavelengths = [start + step/2 + i*step for i in range(10)]
+
     def make_range_idx(nb, a, b):
         return [(i/(nb-1)) * (b - a) + a for i in range(nb)]
 
@@ -73,6 +71,3 @@ def tests():
     for (eta, turb, albedo) in itertools.product(etas, turbs, albedos):
         path = f"../renders/{render_type}/sky_{render_type}_eta{eta:.3f}_t{turb:.3f}_a{albedo:.3f}.exr"
         render_and_compare(path, (eta, turb, albedo))
-
-
-tests()

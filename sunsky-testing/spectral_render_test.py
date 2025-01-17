@@ -19,7 +19,7 @@ def eval_full_spec(plugin, si, wavelengths, render_res = (512, 1024)):
 
     return mi.TensorXf(output_image, (*render_res, nb_channels))
 
-def test_spectral_constants():
+def check_spectral_constants():
 
     def make_range_idx(nb, start, end):
         return [(i/(nb-1)) * (end - start) + start for i in range(nb)]
@@ -61,7 +61,7 @@ def test_spectral_constants():
     std_dev = dr.sqrt(dr.sum((ratios - dr.mean(ratios))**2) / (len(ratios) - 1))
     dr.print("Standard deviation: {std}", std=std_dev)
 
-def test_spectral_conversion():
+def check_spectral_conversion():
     t, a = 3.2, 0.0
     eta = dr.deg2rad(48.2)
     phi_sun = -4*dr.pi/5
@@ -93,7 +93,7 @@ def test_spectral_conversion():
         lum = mi.luminance(res)
         dr.print(lum)
 
-def test_comp_black_body():
+def check_comp_black_body():
     import matplotlib.pyplot as plt
 
     t, a = 5, 0.9
@@ -158,7 +158,7 @@ def test_comp_black_body():
     plt.show()
 
 
-def test_spec_film():
+def check_spec_film():
     from rendering.spherical_sensor import SphericalSensor
 
     t, a = 1, 0.0
@@ -209,7 +209,7 @@ def test_spec_film():
     image = mi.Bitmap(mi.render(scene, spp=8000), pixel_format=mi.Bitmap.PixelFormat.MultiChannel)
     mi.util.write_bitmap("sunsky-testing/res/renders/full_channels.exr", image)
 
-def test_full_eval():
+def check_full_eval():
     from helpers import get_camera_rays
 
     t, a = 2.5, 0.0
@@ -242,9 +242,9 @@ def test_full_eval():
 
 if __name__ == "__main__":
     mi.set_variant("cuda_ad_spectral")
-    #test_spectral_constants()
-    test_comp_black_body()
-    #test_spectral_conversion()
+    #check_spectral_constants()
+    check_comp_black_body()
+    #check_spectral_conversion()
 
-    #test_spec_film()
-    #test_full_eval()
+    #check_spec_film()
+    #check_full_eval()

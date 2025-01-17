@@ -4,9 +4,6 @@ sys.path.insert(0, "build/python")
 import drjit as dr
 import mitsuba as mi
 
-mi.set_variant("cuda_ad_rgb_double")
-
-from helpers import get_north_hemisphere_rays
 
 def get_emitter(t, a, eta, phi_sun):
     sp, cp = dr.sincos(phi_sun)
@@ -92,6 +89,8 @@ def diff_render(scene, key):
 
 
 def diff_plugin(plugin, key):
+    from helpers import get_north_hemisphere_rays
+
     params = mi.traverse(plugin)
     si = dr.zeros(mi.SurfaceInteraction3f)
     render_shape = (256, 1024)
@@ -140,6 +139,7 @@ def diff_plugin(plugin, key):
 
 
 if __name__ == "__main__":
+    mi.set_variant("cuda_ad_rgb")
     t, a, eta = 6, 0.5, dr.deg2rad(50)
     phi_sun = -4*dr.pi/5
 

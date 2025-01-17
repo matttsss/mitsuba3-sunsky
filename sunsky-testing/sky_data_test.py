@@ -5,16 +5,9 @@ import drjit as dr
 import mitsuba as mi
 import matplotlib.pyplot as plt
 
-mi.set_variant("cuda_ad_rgb")
+plugin_name = "sunsky"
 
-from rendering.sunsky_plugin import SunskyEmitter
-from helpers import get_north_hemisphere_rays, get_spherical_rays
-from rendering.sunsky_data import get_tgmm_table, NB_GAUSSIANS, NB_GAUSSIAN_PARAMS
-
-plugin = "sunsky"
-
-
-def test_chi2_emitter():
+def check_chi2():
     t, a = 6, 0.5
     eta = dr.deg2rad(50.2)
     phi_sun = -4*dr.pi/5
@@ -24,13 +17,13 @@ def test_chi2_emitter():
 
     # Compute coefficients
     sky = {
-        "type": plugin,
+        "type": plugin_name,
         "sun_direction": [cp_sun * st, sp_sun * st, ct],
         "sun_scale": 0.0,
         "turbidity": t,
         "albedo": a
     }
-    sample_func, pdf_func = mi.chi2.EmitterAdapter(plugin, sky)
+    sample_func, pdf_func = mi.chi2.EmitterAdapter(plugin_name, sky)
 
     test = mi.chi2.ChiSquareTest(
         domain=mi.chi2.SphericalDomain(),
@@ -55,7 +48,7 @@ def plot_pdf():
 
     # Compute coefficients
     sky = mi.load_dict({
-        "type": plugin,
+        "type": plugin_name,
         "sun_direction": [cp * st, sp * st, ct],
         "sun_scale": 0.0,
         "turbidity": t,
@@ -125,7 +118,8 @@ def plot_pdf():
     plt.show()
 
 if __name__ == "__main__":
+    mi.set_variant("cuda_ad_rgb")
+    from helpers import get_north_hemisphere_rays, get_spherical_rays
 
     plot_pdf()
-    #test_chi2_emitter()
-
+    #check_chi2()
