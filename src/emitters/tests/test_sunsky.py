@@ -142,3 +142,30 @@ def test02_sun_radiance(variants_vec_spectral, turb, eta_ray, gamma):
     assert rel_err <= rtol, (f"Fail when rendering sun with ray at turbidity {turb}, elevation {eta_ray} and gamma {gamma}\n"
                              f"Reference spectrum: {ref_rad}\n"
                              f"Rendered spectrum: {res}\n")
+
+
+@pytest.mark.parametrize("sun_theta", np.linspace(0, dr.pi/2, 5))
+def test03_sun_sampling(variants_vec_backends_once, sun_theta):
+    sun_phi = -dr.pi / 5
+    sp, cp = dr.sincos(sun_phi)
+    st, ct = dr.sincos(sun_theta)
+    sun_dir = mi.Vector3f(cp * st, sp * st, ct)
+
+    plugin = make_emitter(turb=4.0,
+                          sun_phi=sun_phi,
+                          sun_theta=sun_theta,
+                          albedo=0.0,
+                          sun_scale=1.0,
+                          sky_scale=0.0)
+
+    rng = mi.PCG32(size=102400)
+    sample = mi.Point2f(
+        rng.next_float32(),
+        rng.next_float32())
+
+    it = dr.zeros(mi.Interaction3f)
+    ds, w = plugin.sample_direction(it, sample, True)
+
+    # With epsilon to account for numerical precision
+    all_in_sun_cone = dr.all(dr.dot(ds.d, sun_dir) >= (dr.cos(SUN_HALF_APERTURE_ANGLE) - dr.epsilon(mi.Float)), axis=None)
+    assert all_in_sun_cone, "Sampled direction should be in the sun's direction"
