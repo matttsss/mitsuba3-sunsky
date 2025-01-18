@@ -759,7 +759,6 @@ private:
             m_sun_dir = m_to_world.value().transform_affine(m_sun_dir);
         }
 
-        std::cout << "Sun direction: " << m_sun_dir << std::endl;
     }
 
     // ================================================================================================
@@ -767,7 +766,7 @@ private:
     // ================================================================================================
 
     /// Offset used to avoid division by zero in the pdf computation
-    static constexpr ScalarFloat SIN_OFFSET = 0.00775; // chi2 passes with 0.00775
+    static constexpr ScalarFloat SIN_OFFSET = dr::Epsilon<Float>; // chi2 passes with 0.00775
     /// Number of channels used in the skylight model
     static constexpr uint32_t NB_CHANNELS = is_spectral_v<Spectrum> ? NB_WAVELENGTHS : 3;
 

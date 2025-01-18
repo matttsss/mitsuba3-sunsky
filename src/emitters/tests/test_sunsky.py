@@ -6,6 +6,7 @@ import drjit as dr
 import mitsuba as mi
 
 eps = 1e-4
+SIN_OFFSET = 0.00775
 SUN_HALF_APERTURE_ANGLE = dr.deg2rad(0.5388/2.0)
 
 def make_emitter(turb, sun_phi, sun_theta, albedo, sky_scale, sun_scale):
@@ -169,3 +170,37 @@ def test03_sun_sampling(variants_vec_backends_once, sun_theta):
     # With epsilon to account for numerical precision
     all_in_sun_cone = dr.all(dr.dot(ds.d, sun_dir) >= (dr.cos(SUN_HALF_APERTURE_ANGLE) - dr.epsilon(mi.Float)), axis=None)
     assert all_in_sun_cone, "Sampled direction should be in the sun's direction"
+
+
+@pytest.mark.parametrize("turb",      np.linspace(1, 10, 3))
+@pytest.mark.parametrize("sun_theta", np.linspace(0, dr.pi/2, 3))
+def test04_sky_sampling(variants_vec_backends_once, turb, sun_theta):
+    COS_BOUND = dr.sqrt(1 - dr.square(SIN_OFFSET))
+    class CroppedSphericalDomain(mi.chi2.SphericalDomain):
+        def bounds(self):
+            return mi.ScalarBoundingBox2f([-dr.pi, -COS_BOUND], [dr.pi, 1])
+
+    phi_sun = -4*dr.pi/5
+    sp_sun, cp_sun = dr.sincos(phi_sun)
+    st, ct = dr.sincos(sun_theta)
+
+    sky = {
+        "type": "sunsky",
+        "sun_direction": [cp_sun * st, sp_sun * st, ct],
+        "sun_scale": 0.0,
+        "turbidity": turb,
+        "albedo": 0.5
+    }
+
+    sample_func, pdf_func = mi.chi2.EmitterAdapter("sunsky", sky)
+    test = mi.chi2.ChiSquareTest(
+        domain=CroppedSphericalDomain(),
+        pdf_func= pdf_func,
+        sample_func= sample_func,
+        sample_dim=2,
+        sample_count=100_000_000,
+        res=215,
+        ires=32
+    )
+
+    assert test.run(), "Chi2 test failed"
