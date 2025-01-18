@@ -9,6 +9,12 @@ eps = 1e-4
 SIN_OFFSET = 0.00775
 SUN_HALF_APERTURE_ANGLE = dr.deg2rad(0.5388/2.0)
 
+SPECIAL_ALBEDO = {
+    'type': 'irregular',
+    'wavelengths': '320, 360, 400, 440, 480, 520, 560, 600, 640, 680, 720',
+    'values': '0.56, 0.21, 0.58, 0.24, 0.92, 0.42, 0.53, 0.75, 0.54, 0.20, 0.46'
+}
+
 def make_emitter(turb, sun_phi, sun_theta, albedo, sky_scale, sun_scale):
     sp_sun, cp_sun = dr.sincos(sun_phi)
     st, ct = dr.sincos(sun_theta)
@@ -19,7 +25,7 @@ def make_emitter(turb, sun_phi, sun_theta, albedo, sky_scale, sun_scale):
         "sun_scale": sun_scale,
         "sky_scale": sky_scale,
         "turbidity": turb,
-        "albedo_test": albedo
+        "albedo": albedo
     })
 
 
@@ -43,19 +49,15 @@ def eval_full_spec(plugin, si, wavelengths, render_res = (512, 1024)):
     return mi.TensorXf(output_image, (*render_res, nb_channels))
 
 
-@pytest.mark.parametrize("render_params", [
-    (dr.deg2rad(2), 2, 0.2),
-    (dr.deg2rad(20), 5.2, 0.0),
-    (dr.deg2rad(45), 9.8, 0.5),
-])
-def test01_sky_radiance(variants_vec_rgb, variants_vec_spectral, render_params):
+def generate_and_compare(render_params, ref_path, rtol):
+    """
+    Generates the sky radiance with the given parameters and compares it to the reference image
+    :param render_params: (elevation, turbidity, albedo) (elevation in radians)
+    :param ref_path: Path to the reference image
+    :param rtol: Relative error tolerance
+    """
     render_res = (512//2, 512)
     sun_eta, turb, albedo = render_params
-
-    # Conversion float -> spectral does not work
-    # the same in MTS 0.6 so there is a special case for it
-    if mi.is_spectral:
-        albedo = 0.0
 
     plugin = make_emitter(turb=turb,
                           sun_phi=0,
@@ -79,14 +81,8 @@ def test01_sky_radiance(variants_vec_rgb, variants_vec_spectral, render_params):
     si = mi.SurfaceInteraction3f()
     si.wi = mi.Vector3f(cp*st, sp*st, ct)
 
-    if mi.is_rgb:
-        rtol = 0.005
-        rendered_scene = mi.TensorXf(dr.ravel(plugin.eval(si)), (*render_res, 3))
-        ref_path = f"resources/sunsky/test_data/renders/sky_rgb_eta{sun_eta:.3f}_t{turb:.3f}_a{albedo:.3f}.exr"
-    else:
-        rtol = 0.028
-        rendered_scene = eval_full_spec(plugin, si, wavelengths, render_res)
-        ref_path = f"resources/sunsky/test_data/renders/sky_spec_eta{sun_eta:.3f}_t{turb:.3f}_a{albedo:.3f}.exr"
+    rendered_scene = mi.TensorXf(dr.ravel(plugin.eval(si)), (*render_res, 3)) if mi.is_rgb \
+                else eval_full_spec(plugin, si, wavelengths, render_res)
 
     # Load the reference image
     reference_scene = mi.TensorXf(mi.Bitmap(ref_path))
@@ -94,6 +90,44 @@ def test01_sky_radiance(variants_vec_rgb, variants_vec_spectral, render_params):
 
     assert rel_err <= rtol, (f"Fail when rendering plugin: {plugin}\n"
                              f"Mean relative error: {rel_err}, threshold: {rtol}")
+
+
+
+
+@pytest.mark.parametrize("render_params", [
+    (dr.deg2rad(2), 2, 0.2),
+    (dr.deg2rad(20), 5.2, 0.0),
+    (dr.deg2rad(45), 9.8, 0.5),
+])
+def test01_sky_radiance_rgb(variants_vec_rgb, render_params):
+    sun_eta, turb, albedo = render_params
+
+    ref_path = f"resources/sunsky/test_data/renders/sky_rgb_eta{sun_eta:.3f}_t{turb:.3f}_a{albedo:.3f}.exr"
+    generate_and_compare(render_params, ref_path, 0.005)
+
+
+
+
+@pytest.mark.parametrize("render_params", [
+    (dr.deg2rad(2), 2, 0.0),
+    (dr.deg2rad(20), 5.2, 0.0),
+    (dr.deg2rad(45), 9.8, 0.0),
+])
+def test02_sky_radiance_spectral(variants_vec_spectral, render_params):
+    sun_eta, turb, albedo = render_params
+
+    ref_path = f"resources/sunsky/test_data/renders/sky_spec_eta{sun_eta:.3f}_t{turb:.3f}_a{albedo:.3f}.exr"
+    generate_and_compare(render_params, ref_path, 0.028)
+
+
+
+
+def test03_sky_radiance_spectral_albedo(variants_vec_spectral):
+    generate_and_compare((dr.deg2rad(60), 4.2, SPECIAL_ALBEDO),
+                         "resources/sunsky/test_data/renders/sky_spectrum_special.exr", 0.028)
+
+
+
 
 def create_spectrum_file(turb, eta, gamma, ref_wav, ref_rad):
     with open(f"../renders/spectrum/sun_spectrum_t{turb:.1f}_eta{eta:.2f}_gamma{gamma:.3e}.spd", "w") as f:
@@ -108,7 +142,7 @@ def extract_spectrum(turb, eta, gamma):
 @pytest.mark.parametrize("turb",    np.linspace(1, 10, 5))
 @pytest.mark.parametrize("eta_ray", np.linspace(eps, dr.pi/2 - eps, 4))
 @pytest.mark.parametrize("gamma",   np.linspace(0, SUN_HALF_APERTURE_ANGLE - eps, 4))
-def test02_sun_radiance(variants_vec_spectral, turb, eta_ray, gamma):
+def test04_sun_radiance(variants_vec_spectral, turb, eta_ray, gamma):
 
     wavelengths = np.linspace(310, 800, 15)
 
@@ -154,8 +188,10 @@ def test02_sun_radiance(variants_vec_spectral, turb, eta_ray, gamma):
                              f"Rendered spectrum: {res}\n")
 
 
+
+
 @pytest.mark.parametrize("sun_theta", np.linspace(0, dr.pi/2, 5))
-def test03_sun_sampling(variants_vec_backends_once, sun_theta):
+def test05_sun_sampling(variants_vec_backends_once, sun_theta):
     sun_phi = -dr.pi / 5
     sp, cp = dr.sincos(sun_phi)
     st, ct = dr.sincos(sun_theta)
@@ -181,9 +217,11 @@ def test03_sun_sampling(variants_vec_backends_once, sun_theta):
     assert all_in_sun_cone, "Sampled direction should be in the sun's direction"
 
 
+
+
 @pytest.mark.parametrize("turb",      np.linspace(1, 10, 3))
 @pytest.mark.parametrize("sun_theta", np.linspace(0, dr.pi/2, 3))
-def test04_sky_sampling(variants_vec_backends_once, turb, sun_theta):
+def test06_sky_sampling(variants_vec_backends_once, turb, sun_theta):
     COS_BOUND = dr.sqrt(1 - dr.square(SIN_OFFSET))
     class CroppedSphericalDomain(mi.chi2.SphericalDomain):
         def bounds(self):
