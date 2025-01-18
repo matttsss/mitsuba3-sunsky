@@ -179,14 +179,16 @@ NAMESPACE_BEGIN(mitsuba)
 
     template<typename Float>
     struct DateTimeRecord {
-        int year;
-        int month;
-        int day;
+        using Int32 = dr::int32_array_t<Float>;
+        using UInt32 = dr::uint32_array_t<Float>;
+        Int32 year;
+        UInt32 month;
+        UInt32 day;
         Float hour;
         Float minute;
         Float second;
 
-        std::string toString() const {
+        std::string to_string() const {
             std::ostringstream oss;
             oss << "DateTimeRecord[year = " << year
                 << ", month= " << month
@@ -204,7 +206,7 @@ NAMESPACE_BEGIN(mitsuba)
         Float latitude;
         Float timezone;
 
-        std::string toString() const {
+        std::string to_string() const {
             std::ostringstream oss;
             oss << "LocationRecord[latitude = " << latitude
                 << ", longitude = " << longitude
@@ -288,10 +290,10 @@ NAMESPACE_BEGIN(mitsuba)
             Float greenwichMeanSiderealTime = 6.6974243242
                 + 0.0657098283 * elapsedJulianDays + decHours;
 
-            Float localMeanSiderealTime = degToRad(greenwichMeanSiderealTime * 15
+            Float localMeanSiderealTime = dr::deg_to_rad(greenwichMeanSiderealTime * 15
                 + location.longitude);
 
-            Float latitudeInRadians = degToRad(location.latitude);
+            Float latitudeInRadians = dr::deg_to_rad(location.latitude);
             Float cosLatitude = dr::cos(latitudeInRadians);
             Float sinLatitude = dr::sin(latitudeInRadians);
 
@@ -311,7 +313,7 @@ NAMESPACE_BEGIN(mitsuba)
             elevation += (EARTH_MEAN_RADIUS / ASTRONOMICAL_UNIT) * dr::sin(elevation);
         }
 
-        return from_spherical(Point<Float, 2>(azimuth, elevation));
+        return to_spherical<Float>({azimuth, elevation});
     }
 
     /**

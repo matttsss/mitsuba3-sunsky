@@ -83,19 +83,18 @@ public:
         if constexpr (is_spectral_v<Spectrum>)
             c_wavelengths = {320, 360, 400, 440, 480, 520, 560, 600, 640, 680, 720};
 
-        m_sun_scale = props.get<ScalarFloat>("sun_scale", 1.f);
-        m_sky_scale = props.get<ScalarFloat>("sky_scale", 1.f);
+        init_from_props(props);
 
-        m_turbidity = props.get<ScalarFloat>("turbidity", 3.f);
-        dr::make_opaque(m_turbidity);
+        // ================= UPDATE ANGLES =================
+        Vector3f local_sun_dir = dr::normalize(
+                    m_to_world.value().inverse().transform_affine(m_sun_dir));
 
-        m_albedo = props.texture<Texture>("albedo", 1.f);
-        if (m_albedo->is_spatially_varying())
-            Throw("Expected a non-spatially varying radiance spectra!");
+        m_sun_angles = from_spherical(local_sun_dir);
+        m_local_sun_frame = Frame3f(local_sun_dir);
 
-        // ================= GET ALBEDO =================
-        dr::eval(m_albedo);
+        const Float sun_eta = 0.5f * dr::Pi<Float> - m_sun_angles.y();
 
+        // ================= EXTRACT ALBEDO =================
         FloatStorage albedo = dr::zeros<FloatStorage>(NB_CHANNELS);
         if (props.has_property("albedo_test")) {
             albedo += 1;
@@ -103,13 +102,6 @@ public:
         } else {
             albedo = extract_albedo(m_albedo);
         }
-
-        // ================= GET ANGLES =================
-        m_sun_dir = dr::normalize(props.get<ScalarVector3f>("sun_direction"));
-        dr::make_opaque(m_sun_dir);
-
-        update_angles();
-        Float sun_eta = 0.5f * dr::Pi<Float> - m_sun_angles.y();
 
         // ================= GET SKY RADIANCE =================
         m_sky_dataset = array_from_file<Float64, Float>(DATABASE_PATH "sky" + DATABASE_TYPE + "params.bin");
@@ -277,7 +269,16 @@ public:
         dr::set_label(m_turbidity, "turbidity");
 
         FloatStorage albedo = extract_albedo(m_albedo);
-        update_angles();
+
+        // Update sun angles
+        if (sun_dir_changed) {
+            Vector3f local_sun_dir = dr::normalize(
+                    m_to_world.value().inverse().transform_affine(m_sun_dir));
+
+            m_sun_angles = from_spherical(local_sun_dir);
+            m_local_sun_frame = Frame3f(local_sun_dir);
+        }
+
         Float eta = 0.5f * dr::Pi<Float> - m_sun_angles.y();
 
         // Update sky
@@ -334,8 +335,14 @@ public:
             << "  turbidity = " << string::indent(m_turbidity) << std::endl
             << "  sky_scale = " << string::indent(m_sky_scale) << std::endl
             << "  sun_scale = " << string::indent(m_sun_scale) << std::endl
-            << "  albedo = " << string::indent(m_albedo) << std::endl
-            << "]";
+            << "  albedo = " << string::indent(m_albedo) << std::endl;
+        if (m_active_record) {
+            oss << "  sun_dir = " << string::indent(m_sun_dir) << std::endl;
+        } else {
+            oss << "  location = " << m_location.to_string() << std::endl
+                << "  date_time = " << m_time.to_string() << std::endl;
+        }
+        oss << "]";
         return oss.str();
     }
 
@@ -620,14 +627,6 @@ private:
         return albedo;
     }
 
-    void update_angles() {
-        Vector3f local_sun_dir = dr::normalize(
-            m_to_world.value().inverse().transform_affine(m_sun_dir));
-
-        m_sun_angles = from_spherical(local_sun_dir);
-        m_local_sun_frame = Frame3f(local_sun_dir);
-    }
-
     /**
      * \brief Estimates the ratio of sky to sun luminance over the hemisphere,
      * can be used to estimate the sampling weight of the sun and sky.
@@ -719,6 +718,50 @@ private:
         }
     }
 
+
+    void init_from_props(const Properties& props) {
+        m_sun_scale = props.get<ScalarFloat>("sun_scale", 1.f);
+        m_sky_scale = props.get<ScalarFloat>("sky_scale", 1.f);
+
+        m_turbidity = props.get<ScalarFloat>("turbidity", 3.f);
+        dr::make_opaque(m_turbidity);
+
+        m_albedo = props.texture<Texture>("albedo", 1.f);
+        if (m_albedo->is_spatially_varying())
+            Throw("Expected a non-spatially varying radiance spectra!");
+
+        if (props.has_property("sun_direction")) {
+            if (props.has_property("latitude") || props.has_property("longitude")
+                || props.has_property("timezone") || props.has_property("day")
+                || props.has_property("time"))
+                Log(Error, "Both the 'sun_direction' parameter and time/location "
+                           "information were provided -- only one of them can be specified at a time!");
+            m_active_record = false;
+            m_sun_dir = dr::normalize(props.get<ScalarVector3f>("sun_direction"));
+            dr::make_opaque(m_sun_dir);
+
+        } else {
+            m_location.latitude  = props.get<ScalarFloat>("latitude", 35.6894f);
+            m_location.longitude = props.get<ScalarFloat>("longitude", 139.6917f);
+            m_location.timezone  = props.get<ScalarFloat>("timezone", 9);
+            m_time.year          = props.get<ScalarInt32>("year", 2010);
+            m_time.day           = props.get<ScalarUInt32>("day", 10);
+            m_time.month         = props.get<ScalarUInt32>("month", 7);
+            m_time.hour          = props.get<ScalarFloat>("hour", 15.0f);
+            m_time.minute        = props.get<ScalarFloat>("minute", 0.0f);
+            m_time.second        = props.get<ScalarFloat>("second", 0.0f);
+
+            m_active_record = true;
+            dr::make_opaque(m_location.latitude, m_location.longitude, m_location.timezone,
+                            m_time.year, m_time.day, m_time.month, m_time.hour, m_time.minute, m_time.second);
+
+            m_sun_dir = compute_sun_coordinates(m_time, m_location);
+            m_sun_dir = m_to_world.value().transform_affine(m_sun_dir);
+        }
+
+        std::cout << "Sun direction: " << m_sun_dir << std::endl;
+    }
+
     // ================================================================================================
     // ========================================= ATTRIBUTES ===========================================
     // ================================================================================================
@@ -753,6 +796,9 @@ private:
     Vector3f m_sun_dir;
     Point2f m_sun_angles;
     Frame3f m_local_sun_frame;
+    bool m_active_record = false;
+    LocationRecord<Float> m_location;
+    DateTimeRecord<Float> m_time;
 
     // Radiance parameters
     FloatStorage m_sky_params;
