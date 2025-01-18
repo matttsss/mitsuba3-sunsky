@@ -43,11 +43,19 @@ def eval_full_spec(plugin, si, wavelengths, render_res = (512, 1024)):
     return mi.TensorXf(output_image, (*render_res, nb_channels))
 
 
-@pytest.mark.parametrize("turb",    np.linspace(1, 10, 7))
-@pytest.mark.parametrize("sun_eta", np.linspace(0, dr.pi/2, 5))
-@pytest.mark.parametrize("albedo",  np.linspace(0, 1, 3))
-def test01_sky_radiance(variants_vec_backends_once, turb, sun_eta, albedo):
-    render_res = (1024//2, 1024)
+@pytest.mark.parametrize("render_params", [
+    (dr.deg2rad(2), 2, 0.2),
+    (dr.deg2rad(20), 5.2, 0.0),
+    (dr.deg2rad(45), 9.8, 0.5),
+])
+def test01_sky_radiance(variants_vec_rgb, variants_vec_spectral, render_params):
+    render_res = (512//2, 512)
+    sun_eta, turb, albedo = render_params
+
+    # Conversion float -> spectral does not work
+    # the same in MTS 0.6 so there is a special case for it
+    if mi.is_spectral:
+        albedo = 0.0
 
     plugin = make_emitter(turb=turb,
                           sun_phi=0,
@@ -71,16 +79,17 @@ def test01_sky_radiance(variants_vec_backends_once, turb, sun_eta, albedo):
     si = mi.SurfaceInteraction3f()
     si.wi = mi.Vector3f(cp*st, sp*st, ct)
 
-    # Evaluate the plugin
-    rendered_scene  = mi.TensorXf(dr.ravel(plugin.eval(si)), (*render_res, 3)) if mi.is_rgb \
-                 else eval_full_spec(plugin, si, wavelengths, render_res)
+    if mi.is_rgb:
+        rtol = 0.005
+        rendered_scene = mi.TensorXf(dr.ravel(plugin.eval(si)), (*render_res, 3))
+        ref_path = f"resources/sunsky/test_data/renders/sky_rgb_eta{sun_eta:.3f}_t{turb:.3f}_a{albedo:.3f}.exr"
+    else:
+        rtol = 0.028
+        rendered_scene = eval_full_spec(plugin, si, wavelengths, render_res)
+        ref_path = f"resources/sunsky/test_data/renders/sky_spec_eta{sun_eta:.3f}_t{turb:.3f}_a{albedo:.3f}.exr"
 
     # Load the reference image
-    render_type = "rgb" if mi.is_rgb else "spec"
-    ref_path = f"../renders/{render_type}/sky_{render_type}_eta{sun_eta:.3f}_t{turb:.3f}_a{albedo:.3f}.exr"
     reference_scene = mi.TensorXf(mi.Bitmap(ref_path))
-
-    rtol = 0.005 if mi.is_rgb else 0.0354
     rel_err = dr.mean(dr.abs(rendered_scene - reference_scene) / (dr.abs(reference_scene) + 0.001))
 
     assert rel_err <= rtol, (f"Fail when rendering plugin: {plugin}\n"

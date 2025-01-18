@@ -817,8 +817,8 @@ NAMESPACE_BEGIN(mitsuba)
         write_sky_data(path + "sky_spec_rad.bin", l_spectral);
         write_sky_data(path + "sky_rgb_params.bin", f_RGB);
         write_sky_data(path + "sky_rgb_rad.bin", l_RGB);
-        write_sky_data(path + "sky_xyz_params.bin", f_XYZ);
-        write_sky_data(path + "sky_xyz_rad.bin", l_XYZ);
+        //write_sky_data(path + "sky_xyz_params.bin", f_XYZ);
+        //write_sky_data(path + "sky_xyz_rad.bin", l_XYZ);
         write_sun_data_spectral(path + "sun_spec_rad.bin");
         write_sun_data_rgb(path + "sun_rgb_rad.bin");
         write_limb_darkening_data(path + "sun_spec_ld.bin");

@@ -63,7 +63,7 @@ It is based on the Wilkie-Hosek sun and sky model.
 
  */
 
-#define DATABASE_PATH "resources/sunsky/"
+#define DATABASE_PATH "resources/sunsky/datasets/"
 #define DATABASE_TYPE std::string(is_spectral_v<Spectrum> ? "_spec_" : "_rgb_")
 
 template <typename Float, typename Spectrum>
