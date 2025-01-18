@@ -100,10 +100,10 @@ def extract_spectrum(turb, eta, gamma):
 @pytest.mark.parametrize("gamma",   np.linspace(0, SUN_HALF_APERTURE_ANGLE - eps, 4))
 def test02_sun_radiance(variants_vec_spectral, turb, eta_ray, gamma):
 
-    wavelengths = [320, 400, 500, 600, 700, 800]
-    #ref_rad = mi.Float([mi.hosek_sun_rad(turb, wav, eta_ray, gamma) for wav in wavelengths])
+    wavelengths = np.linspace(310, 800, 15)
 
     # Create the spectrum file
+    #ref_rad = [mi.hosek_sun_rad(turb, wav, eta_ray, gamma) for wav in wavelengths]
     #create_spectrum_file(turb, eta_ray, gamma, wavelengths, ref_rad)
 
     phi = dr.pi/5

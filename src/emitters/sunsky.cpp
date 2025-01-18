@@ -175,11 +175,10 @@ public:
 
         } else {
             const Spectrum normalized_wavelengths = (si.wavelengths - WAVELENGTHS<ScalarFloat>[0]) / WAVELENGTH_STEP;
+            const SpecMask valid_idx = (0.f <= normalized_wavelengths) & (normalized_wavelengths <= NB_CHANNELS - 1);
 
             const SpecUInt32 query_idx_low  = dr::floor2int<SpecUInt32>(normalized_wavelengths),
                              query_idx_high = query_idx_low + 1;
-
-            SpecMask valid_idx = (query_idx_low < NB_CHANNELS) & (query_idx_high < NB_CHANNELS);
 
             const Spectrum lerp_factor = normalized_wavelengths - query_idx_low;
 
