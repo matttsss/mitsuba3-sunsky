@@ -75,11 +75,14 @@ def diff_render(scene, key):
 
     # Use AD framework
     dr.enable_grad(params[key])
+    dr.set_grad(params[key], 1.0)
     params.update()
-    dr.graphviz_ad().view()
 
     image = mi.render(scene, params, spp=128)
-    dr.forward(params[key])
+    dr.forward_from(params[key], dr.ADFlag.ClearNone)
+
+    dr.graphviz_ad().view()
+
     grad_image = dr.grad(image)
 
     grad_image = mi.Bitmap(grad_image).convert(component_format=mi.Struct.Type.Float32)
@@ -95,6 +98,8 @@ def diff_plugin(plugin, key):
     si = dr.zeros(mi.SurfaceInteraction3f)
     render_shape = (256, 1024)
     si.wi = get_north_hemisphere_rays(render_shape)
+    if mi.is_spectral:
+        si.wavelengths = 500.0
 
     # Finite differences
     if False:
@@ -124,23 +129,23 @@ def diff_plugin(plugin, key):
     dr.set_grad(params[key], 1.0)
     params.update()
 
-    image = dr.reshape(mi.TensorXf, plugin.eval(si), (*render_shape, 3)) if dr.hint(mi.is_rgb, mode="scalar") else plugin.eval(si)
+    image = dr.reshape(mi.TensorXf, plugin.eval(si), (*render_shape, 3 if mi.is_rgb else 4))
     dr.set_label(image, "image")
 
-    dr.forward_from(params[key], dr.ADFlag.ClearNone)
+    dr.forward_from(params[key], flags=dr.ADFlag.ClearNone)
     dr.graphviz_ad().view()
 
-    grad_image = dr.grad(image)
+    dr.print(image.grad)
 
     if dr.hint(mi.is_rgb, mode="scalar"):
-        grad_image = mi.Bitmap(grad_image).convert(component_format=mi.Struct.Type.Float32)
+        grad_image = mi.Bitmap(image.grad).convert(component_format=mi.Struct.Type.Float32)
 
         mi.util.write_bitmap("sunsky-testing/res/renders/grad_image.png", grad_image)
         mi.util.write_bitmap("sunsky-testing/res/renders/grad_image.exr", grad_image)
 
 
 if __name__ == "__main__":
-    mi.set_variant("cuda_ad_rgb")
+    mi.set_variant("cuda_ad_spectral")
     t, a, eta = 6, 0.5, dr.deg2rad(50)
     phi_sun = -4*dr.pi/5
 

@@ -185,9 +185,7 @@ public:
                      sun_rad_high = render_sun<Spectrum>(query_idx_high, cos_theta, gamma, hit_sun & valid_idx),
                      sun_rad = dr::lerp(sun_rad_low, sun_rad_high, lerp_factor);
 
-            Spectrum sun_ld = 1.f;
-            if constexpr (is_spectral_v<Spectrum>)
-                sun_ld = compute_sun_ld<Spectrum>(query_idx_low, query_idx_high, lerp_factor, gamma, hit_sun & valid_idx);
+            Spectrum sun_ld = compute_sun_ld<Spectrum>(query_idx_low, query_idx_high, lerp_factor, gamma, hit_sun & valid_idx);
 
             res += m_sun_scale * sun_rad * sun_ld * get_area_ratio(m_sun_half_aperture);
 
