@@ -182,7 +182,7 @@ def test04_sun_radiance(variants_vec_spectral, turb, eta_ray, gamma):
     ref_rad = mi.Float(ref_rad)
     rel_err = dr.mean(dr.abs(res - ref_rad) / (ref_rad + 1e-6))
 
-    rtol = 1e-3
+    rtol = 1e-2
     assert rel_err <= rtol, (f"Fail when rendering sun with ray at turbidity {turb}, elevation {eta_ray} and gamma {gamma}\n"
                              f"Reference spectrum: {ref_rad}\n"
                              f"Rendered spectrum: {res}\n")

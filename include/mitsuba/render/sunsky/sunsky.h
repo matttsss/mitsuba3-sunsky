@@ -79,6 +79,18 @@ NAMESPACE_BEGIN(mitsuba)
         };
     }
 
+    /**
+     * \brief Provides the ratio of the sun's original area to that
+     * of a custom aperture angle
+     *
+     * @param custom_half_aperture Angle of the sun's half aperture
+     * @return The ratio of the sun's area to the custom aperture's area
+     */
+    template <typename Value>
+    MI_INLINE Value get_area_ratio(const Value& custom_half_aperture) {
+        return (1 - dr::cos(SUN_HALF_APERTURE)) / (1 - dr::cos(custom_half_aperture));
+    }
+
 
     // ================================================================================================
     // ========================================== SKY MODEL ===========================================

@@ -153,7 +153,7 @@ public:
               gamma = dr::unit_angle(Vector3f(m_local_sun_frame.n), local_wo);
 
         active &= cos_theta >= 0;
-        Mask hit_sun = active & (dr::dot(m_local_sun_frame.n, local_wo) >= SUN_COS_CUTOFF);
+        Mask hit_sun = active & (dr::dot(m_local_sun_frame.n, local_wo) >= dr::cos(m_sun_half_aperture));
 
         UnpolarizedSpectrum res = 0.f;
         if constexpr (is_rgb_v<Spectrum>) {
@@ -161,7 +161,9 @@ public:
             const SpecUInt32 idx = SpecUInt32({0, 1, 2});
 
             res = m_sky_scale * render_sky<Spectrum>(idx, cos_theta, gamma, active);
-            res += m_sun_scale * render_sun<Spectrum>(idx, cos_theta, gamma, hit_sun) * 467.069280386; // FIXME: explain this factor
+
+            // FIXME: explain this constant
+            res += m_sun_scale * render_sun<Spectrum>(idx, cos_theta, gamma, hit_sun) * 467.069280386 * get_area_ratio(m_sun_half_aperture);
 
             res *= MI_CIE_Y_NORMALIZATION;
 
@@ -187,7 +189,7 @@ public:
             if constexpr (is_spectral_v<Spectrum>)
                 sun_ld = compute_sun_ld<Spectrum>(query_idx_low, query_idx_high, lerp_factor, gamma, hit_sun & valid_idx);
 
-            res += m_sun_scale * sun_rad * sun_ld;
+            res += m_sun_scale * sun_rad * sun_ld * get_area_ratio(m_sun_half_aperture);
 
         }
 
@@ -299,10 +301,13 @@ public:
             m_gaussian_distr = DiscreteDistribution<Float>(mis_weights);
         }
 
+        m_sky_sampling_w = estimate_sky_sun_ratio();
+
         dr::set_label(m_sky_params, "sky_params");
         dr::set_label(m_sky_radiance, "sky_radiance");
         dr::set_label(m_sun_radiance, "sun_radiance");
         dr::set_label(m_gaussians, "gaussian_params");
+        dr::set_label(m_sky_sampling_w, "sky sampling weight");
     }
 
     void set_scene(const Scene *scene) override {
@@ -335,7 +340,8 @@ public:
             << "  turbidity = " << string::indent(m_turbidity) << std::endl
             << "  sky_scale = " << string::indent(m_sky_scale) << std::endl
             << "  sun_scale = " << string::indent(m_sun_scale) << std::endl
-            << "  albedo = " << string::indent(m_albedo) << std::endl;
+            << "  albedo = " << string::indent(m_albedo) << std::endl
+            << "  sun aperture (°) = " << string::indent(dr::rad_to_deg(2 * m_sun_half_aperture)) << std::endl;
         if (m_active_record) {
             oss << "  sun_dir = " << string::indent(m_sun_dir) << std::endl;
         } else {
@@ -435,8 +441,8 @@ private:
             //        sin_sun_cutoff_sqr = dr::fnmadd(SUN_COS_CUTOFF, SUN_COS_CUTOFF, 1.f);
             //Float64 cos_psi = dr::safe_sqrt(1 - sin_gamma_sqr / sin_sun_cutoff_sqr);
 
-            const Float64 sol_rad_sin = dr::sin(SUN_HALF_APERTURE);
-            const Float64 ar2 = 1 / ( sol_rad_sin * sol_rad_sin );
+            const ScalarFloat64 sol_rad_sin = dr::sin(m_sun_half_aperture);
+            const ScalarFloat64 ar2 = 1 / ( sol_rad_sin * sol_rad_sin );
             const Float64 singamma = (Float64) dr::sin(gamma);
             const Float64 sc2 = 1.0 - ar2 * singamma * singamma;
             const Float cos_psi = dr::safe_sqrt(sc2);
@@ -488,8 +494,8 @@ private:
         //        sin_sun_cutoff_sqr = dr::fnmadd(SUN_COS_CUTOFF, SUN_COS_CUTOFF, 1.f);
         //Float64 cos_psi = dr::safe_sqrt(1 - sin_gamma_sqr / sin_sun_cutoff_sqr);
 
-        const Float64 sol_rad_sin = dr::sin(SUN_HALF_APERTURE);
-        const Float64 ar2 = 1 / ( sol_rad_sin * sol_rad_sin );
+        const ScalarFloat64 sol_rad_sin = dr::sin(m_sun_half_aperture);
+        const ScalarFloat64 ar2 = 1 / ( sol_rad_sin * sol_rad_sin );
         const Float64 singamma = dr::sin(gamma);
         const Float64 sc2 = 1.0 - ar2 * singamma * singamma;
         const Float cos_psi = dr::safe_sqrt(sc2);
@@ -546,7 +552,7 @@ private:
 
     Vector3f sample_sun(const Point2f& sample) const {
         return m_local_sun_frame.to_world(
-            warp::square_to_uniform_cone(sample, SUN_COS_CUTOFF)
+            warp::square_to_uniform_cone(sample, (Float) dr::cos(m_sun_half_aperture))
         );
     }
 
@@ -564,9 +570,10 @@ private:
         active &= (Frame3f::cos_theta(local_dir) >= 0.f) && (sin_theta != 0.f);
         sin_theta = dr::maximum(sin_theta, SIN_OFFSET);
 
+        const Float cosine_cutoff = dr::cos(m_sun_half_aperture);
         Float sky_pdf = tgmm_pdf(from_spherical(local_dir), active) / sin_theta,
-              sun_pdf = warp::square_to_uniform_cone_pdf(m_local_sun_frame.to_local(local_dir), SUN_COS_CUTOFF);
-              sun_pdf = dr::select(!check_sun || dr::dot(m_local_sun_frame.n, local_dir) >= SUN_COS_CUTOFF, sun_pdf, 0.f);
+              sun_pdf = warp::square_to_uniform_cone_pdf(m_local_sun_frame.to_local(local_dir), cosine_cutoff);
+              sun_pdf = dr::select(!check_sun || dr::dot(m_local_sun_frame.n, local_dir) >= cosine_cutoff, sun_pdf, 0.f);
 
         return {sky_pdf, sun_pdf};
     }
@@ -673,10 +680,12 @@ private:
 
             // Compute sun radiance over hemisphere
             {
+                const ScalarFloat cosine_cutoff = dr::cos(m_sun_half_aperture);
+
                 // Mapping for [-1, 1] x [-1, 1] -> [0, 2pi] x [cos(alpha/2), 1]
-                const Float inv_J = 0.5f * dr::Pi<ScalarFloat> * (1 - SUN_COS_CUTOFF);
+                const Float inv_J = 0.5f * dr::Pi<ScalarFloat> * (1 - cosine_cutoff);
                 Float phi = dr::Pi<Float> * (x + 1),
-                      cos_gamma = 0.5f * ((1 - SUN_COS_CUTOFF) * x + (1 + SUN_COS_CUTOFF));
+                      cos_gamma = 0.5f * ((1 - cosine_cutoff) * x + (1 + cosine_cutoff));
 
                 std::tie(phi, cos_gamma) = dr::meshgrid(phi, cos_gamma);
                 const auto [w_phi, w_cos_theta] = dr::meshgrid(w_x, w_x);
@@ -707,10 +716,10 @@ private:
             Float sky_lum = m_sky_scale, sun_lum = m_sun_scale;
             if constexpr (is_rgb_v<Spectrum>) {
                 sky_lum *= luminance(sky_radiance);
-                sun_lum *= luminance(sun_radiance) * 467.069280386;
+                sun_lum *= luminance(sun_radiance) * 467.069280386 * get_area_ratio(m_sun_half_aperture);
             } else {
                 sky_lum *= luminance(sky_radiance, c_wavelengths);
-                sun_lum *= luminance(sun_radiance, c_wavelengths);
+                sun_lum *= luminance(sun_radiance, c_wavelengths) * get_area_ratio(m_sun_half_aperture);
             }
 
             // Normalize quantities for valid distribution
@@ -725,6 +734,10 @@ private:
 
         m_turbidity = props.get<ScalarFloat>("turbidity", 3.f);
         dr::make_opaque(m_turbidity);
+
+        m_sun_half_aperture = dr::deg_to_rad(0.5f * props.get<ScalarFloat>("sun_aperture", 0.5358));
+        if (m_sun_half_aperture <= 0.f || 0.5f * dr::Pi<Float> <= m_sun_half_aperture)
+            Throw("Invalid sun aperture angle, must be in ]0, 90[ degrees!");
 
         m_albedo = props.texture<Texture>("albedo", 1.f);
         if (m_albedo->is_spatially_varying())
@@ -776,9 +789,6 @@ private:
                               SUN_DATASET_SIZE = NB_TURBIDITY * NB_CHANNELS * NB_SUN_SEGMENTS * NB_SUN_CTRL_PTS * (is_spectral_v<Spectrum> ? 1 : NB_SUN_LD_PARAMS),
                               TGMM_DATA_SIZE = (NB_TURBIDITY - 1) * NB_ETAS * NB_GAUSSIAN * NB_GAUSSIAN_PARAMS;
 
-    /// Cosine of the sun's cutoff angle
-    const Float SUN_COS_CUTOFF = (Float) dr::cos(SUN_HALF_APERTURE);
-
     FullSpectrum c_wavelengths;
 
     Float m_surface_area;
@@ -795,6 +805,7 @@ private:
     Vector3f m_sun_dir;
     Point2f m_sun_angles;
     Frame3f m_local_sun_frame;
+    ScalarFloat m_sun_half_aperture;
     bool m_active_record = false;
     LocationRecord<Float> m_location;
     DateTimeRecord<Float> m_time;
