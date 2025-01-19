@@ -450,12 +450,31 @@ private:
             SpecUInt32 global_idx = pos * (3 * NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS) +
                                     channel_idx * (NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS);
 
+#if 0
+            UInt32 k_ = 0, j_ = 0;
+            std::tie(k_, j_, solar_radiance) = dr::while_loop(
+                std::make_tuple(k_, j_, solar_radiance),
+                [](const UInt32& k, const UInt32&, const Spec&) {
+                    return k < NB_SUN_CTRL_PTS;
+                },
+                [&](UInt32& k, UInt32& j, Spec& solar_radiance_) {
+                    solar_radiance_ += dr::pow(x, k) * dr::pow(cos_psi, j) *
+                                      dr::gather<Spec>(m_sun_radiance, global_idx + k * NB_SUN_LD_PARAMS + j, active);
+
+                    j += 1;
+                    k = dr::select(j == NB_SUN_LD_PARAMS, k + 1, k);
+                    j = dr::select(j == NB_SUN_LD_PARAMS, 0, j);
+                },
+                "Sun radiance computation"
+            );
+#else
             for (uint8_t k = 0; k < NB_SUN_CTRL_PTS; ++k) {
                 for (uint8_t j = 0; j < NB_SUN_LD_PARAMS; ++j) {
                     solar_radiance += dr::pow(x, k) * dr::pow(cos_psi, j) *
                                       dr::gather<Spec>(m_sun_radiance, global_idx + k * NB_SUN_LD_PARAMS + j, active);
                 }
             }
+#endif
         }
 
         return solar_radiance & active;

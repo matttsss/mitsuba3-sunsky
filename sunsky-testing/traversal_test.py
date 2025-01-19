@@ -121,6 +121,7 @@ def diff_plugin(plugin, key):
 
     # Use AD framework
     dr.enable_grad(params[key])
+    dr.set_grad(params[key], 1.0)
     params.update()
 
     image = dr.reshape(mi.TensorXf, plugin.eval(si), (*render_shape, 3)) if dr.hint(mi.is_rgb, mode="scalar") else plugin.eval(si)
