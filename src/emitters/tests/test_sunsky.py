@@ -217,16 +217,17 @@ def test05_sun_sampling(variants_vec_backends_once, sun_theta):
     assert all_in_sun_cone, "Sampled direction should be in the sun's direction"
 
 
+class CroppedSphericalDomain(mi.chi2.SphericalDomain):
+    """
+    Cropped spherical domain that avoids the singularity at the north pole by SIN_OFFSET
+    """
+    def bounds(self):
+        cos_bound = dr.sqrt(1 - dr.square(SIN_OFFSET))
+        return mi.ScalarBoundingBox2f([-dr.pi, -cos_bound], [dr.pi, 1])
 
-
-@pytest.mark.parametrize("turb",      np.linspace(1, 10, 3))
-@pytest.mark.parametrize("sun_theta", np.linspace(0, dr.pi/2, 3))
+@pytest.mark.parametrize("turb",      [2.1, 4.8, 6.0])
+@pytest.mark.parametrize("sun_theta", [dr.pi/4, 3*dr.pi/4])
 def test06_sky_sampling(variants_vec_backends_once, turb, sun_theta):
-    COS_BOUND = dr.sqrt(1 - dr.square(SIN_OFFSET))
-    class CroppedSphericalDomain(mi.chi2.SphericalDomain):
-        def bounds(self):
-            return mi.ScalarBoundingBox2f([-dr.pi, -COS_BOUND], [dr.pi, 1])
-
     phi_sun = -4*dr.pi/5
     sp_sun, cp_sun = dr.sincos(phi_sun)
     st, ct = dr.sincos(sun_theta)
@@ -236,6 +237,35 @@ def test06_sky_sampling(variants_vec_backends_once, turb, sun_theta):
         "sun_direction": [cp_sun * st, sp_sun * st, ct],
         "sun_scale": 0.0,
         "turbidity": turb,
+        "albedo": 0.5
+    }
+
+    sample_func, pdf_func = mi.chi2.EmitterAdapter("sunsky", sky)
+    test = mi.chi2.ChiSquareTest(
+        domain=CroppedSphericalDomain(),
+        pdf_func= pdf_func,
+        sample_func= sample_func,
+        sample_dim=2,
+        sample_count=100_000_000,
+        res=215,
+        ires=32
+    )
+
+    assert test.run(), "Chi2 test failed"
+
+@pytest.mark.parametrize("turb",      [2.1, 4.8, 6.0])
+@pytest.mark.parametrize("sun_theta", [dr.pi/4, 3*dr.pi/4])
+def test07_sun_and_sky_sampling(variants_vec_backends_once, turb, sun_theta):
+    phi_sun = -4*dr.pi/5
+    sp_sun, cp_sun = dr.sincos(phi_sun)
+    st, ct = dr.sincos(sun_theta)
+
+    sky = {
+        "type": "sunsky",
+        "sun_direction": [cp_sun * st, sp_sun * st, ct],
+        "turbidity": turb,
+        # Increase the sun aperture to avoid errors with chi2's resolution
+        "sun_aperture": 30.0,
         "albedo": 0.5
     }
 
