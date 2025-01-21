@@ -85,6 +85,9 @@ public:
 
         init_from_props(props);
 
+        // Extract albedo from texture
+        FloatStorage albedo = extract_albedo(m_albedo);
+
         // ================= UPDATE ANGLES =================
         Vector3f local_sun_dir = m_to_world.value().inverse().transform_affine(m_sun_dir);
 
@@ -92,15 +95,6 @@ public:
         m_local_sun_frame = Frame3f(local_sun_dir);
 
         const Float sun_eta = 0.5f * dr::Pi<Float> - m_sun_angles.y();
-
-        // ================= EXTRACT ALBEDO =================
-        FloatStorage albedo = dr::zeros<FloatStorage>(NB_CHANNELS);
-        if (props.has_property("albedo_test")) {
-            albedo += 1;
-            albedo *= props.get<ScalarFloat>("albedo_test");
-        } else {
-            albedo = extract_albedo(m_albedo);
-        }
 
         // ================= GET SKY RADIANCE =================
         m_sky_dataset = array_from_file<Float64, Float>(DATABASE_PATH "sky" + DATABASE_TYPE + "params.bin");

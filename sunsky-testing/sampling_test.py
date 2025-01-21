@@ -4,26 +4,25 @@ sys.path.insert(0, "build/python")
 import drjit as dr
 import mitsuba as mi
 
-def check_sampling():
-    t, a = 6, 0.5
-    eta = dr.deg2rad(50.2)
-    phi_sun = -4*dr.pi/5
-
-    #t, a = 3, 0.5
-    #eta = dr.deg2rad(74)
-    #phi_sun = -4*dr.pi/5
-
-    sp_sun, cp_sun = dr.sincos(phi_sun)
+def get_dict(t, a, eta, sky_scale=1, sun_scale=0, phi=-4*dr.pi/5):
+    sp_sun, cp_sun = dr.sincos(phi)
     st, ct = dr.sincos(dr.pi/2 - eta)
 
-    sky = {
+    return {
         "type": "sunsky",
         "sun_direction": [cp_sun * st, sp_sun * st, ct],
-        "sun_scale": 0.0,
+        "sky_scale": sky_scale,
+        "sun_scale": sun_scale,
         "turbidity": t,
         "albedo": a
     }
-    sky_emitter = mi.load_dict(sky)
+
+def check_sampling():
+    t, a = 6, 0.5
+    eta = dr.deg2rad(50.2)
+    plugin_dict = get_dict(t, a, eta)
+
+    sky_emitter = mi.load_dict(plugin_dict)
     it = dr.zeros(mi.Interaction3f)
 
     nb_samples = 250_000_000
@@ -45,7 +44,7 @@ def check_sampling():
     dr.print("Problematic samples: {samples}\n", samples=problematic_samples)
 
 
-    sample_func, pdf_func = mi.chi2.EmitterAdapter("sunsky", sky)
+    sample_func, pdf_func = mi.chi2.EmitterAdapter("sunsky", plugin_dict)
     test = mi.chi2.ChiSquareTest(
         domain=mi.chi2.SphericalDomain(),
         pdf_func= pdf_func,
@@ -59,8 +58,33 @@ def check_sampling():
     dr.print("Chi2 passes: {chi2_pass}", chi2_pass=test.run())
 
 
+def plot_sun_sky_weight():
+    import numpy as np
+    import matplotlib.pyplot as plt
+
+    res = (100, 100)
+    turbs = np.linspace(1, 10, res[0])
+    etas  = np.linspace(0, 90, res[1]) * np.pi / 180
+
+    weights = np.zeros(res)
+    for i in range(res[0]):
+        for j in range(res[1]):
+            plugin = mi.load_dict(get_dict(turbs[i], 0.5, etas[j], 1, 1))
+            weights[i, j] = plugin.pdf_direction(mi.Interaction3f(), mi.DirectionSample3f(), True)[0]
+
+    print(np.mean(weights))
+    etas = etas * 180 / np.pi
+    plt.imshow(weights, extent=(etas[0], etas[-1], turbs[0], turbs[-1]), origin="lower", aspect="auto")
+    plt.colorbar()
+    plt.ylabel("Turbidity")
+    plt.xlabel("Elevation angle (°)")
+    plt.title("Probability to sample the sky over the sun")
+    plt.show()
+
+
 if __name__ == "__main__":
     mi.set_variant("cuda_ad_rgb")
 
-    check_sampling()
+    plot_sun_sky_weight()
+    #check_sampling()
 

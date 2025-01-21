@@ -61,37 +61,54 @@ def check_spectral_constants():
     std_dev = dr.sqrt(dr.sum((ratios - dr.mean(ratios))**2) / (len(ratios) - 1))
     dr.print("Standard deviation: {std}", std=std_dev)
 
-def check_spectral_conversion():
-    t, a = 3.2, 0.0
-    eta = dr.deg2rad(48.2)
-    phi_sun = -4*dr.pi/5
+def get_plugin(turb, eta_ray, gamma, phi=-4*dr.pi/5, albedo = 0.0):
+    theta_sun = dr.pi/2 - eta_ray - gamma
+    theta_sun = dr.select(theta_sun < 0, dr.pi/2 - eta_ray + gamma, theta_sun)
 
-    sp, cp = dr.sincos(phi_sun)
-    st, ct = dr.sincos(dr.pi/2 - eta)
-    plugin = mi.load_dict({
+    sp, cp = dr.sincos(phi)
+    st, ct = dr.sincos(theta_sun)
+
+    return mi.load_dict({
         'type': 'sunsky',
-        'sun_direction': [cp * st, sp * st, ct],
-        'sun_scale': 0.0,
-        'turbidity': t,
-        'albedo': a,
+        'sun_direction':[cp * st, sp * st, ct],
+        'sky_scale': 0.0,
+        'turbidity': turb,
+        'albedo': albedo,
     })
 
+def plot_color_matching_func():
+    import matplotlib.pyplot as plt
+
+    SUN_HALF_AP = dr.deg2rad(0.5338/2.0)
+
+    t, a, eta = 5, 0.9, dr.deg2rad(2)
+    phi = -4*dr.pi/5
+    plugin = get_plugin(t, eta, dr.deg2rad(0.11), phi)
+
+    wavelengths = dr.linspace(mi.Float, 360, 720, 60)
     si = dr.zeros(mi.SurfaceInteraction3f)
-    if dr.hint(mi.is_spectral, mode="scalar"):
-        si.wavelengths = dr.arange(mi.Float, 320, 760, 40)
+    si.wavelengths = wavelengths
+
+    sp, cp = dr.sincos(phi)
+    st, ct = dr.sincos(dr.pi/2 - eta)
     si.wi = -mi.Vector3f(cp * st, sp * st, ct)
 
-    res = plugin.eval(si)
+    res = plugin.eval(si)[0]
+    res /= dr.max(res)
 
-    if dr.hint(mi.is_spectral, mode="scalar"):
-        res = dr.mean(mi.spectrum_to_srgb(res, si.wavelengths), axis=1)
-        dr.print(res)
+    matching_func = mi.linear_rgb_rec(wavelengths)
+    wavelengths = wavelengths.numpy()
 
-        lum = mi.luminance(res)
-        dr.print(lum)
-    else:
-        lum = mi.luminance(res)
-        dr.print(lum)
+    plt.plot(wavelengths, res.numpy() * matching_func[0].numpy(), label="Red color matching function", color="red")
+    plt.plot(wavelengths, res.numpy() * matching_func[1].numpy(), label="Green color matching function", color="green")
+    plt.plot(wavelengths, res.numpy() * matching_func[2].numpy(), label="Blue color matching function", color="blue")
+    plt.plot(wavelengths, res.numpy(), label="Sun radiance")
+
+    plt.xlabel("Wavelengths[nm]")
+    plt.ylabel("Matching function")
+    plt.legend()
+    plt.grid()
+    plt.show()
 
 def check_comp_black_body():
     import matplotlib.pyplot as plt
@@ -243,8 +260,7 @@ def check_full_eval():
 if __name__ == "__main__":
     mi.set_variant("cuda_ad_spectral")
     #check_spectral_constants()
-    check_comp_black_body()
-    #check_spectral_conversion()
-
+    #check_comp_black_body()
+    plot_color_matching_func()
     #check_spec_film()
     #check_full_eval()
