@@ -465,6 +465,19 @@ private:
                 },
                 "Sun radiance computation"
             );
+#elif 0
+            using SpecArray = dr::Array<Spec, NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS>;
+            using UInt32Array = dr::Array<UInt32, NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS>;
+
+            UInt32Array idx = dr::arange<UInt32Array>(NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS),
+                        k_idx = idx / NB_SUN_LD_PARAMS,
+                        j_idx = idx % NB_SUN_LD_PARAMS;
+
+            SpecArray pow_x = dr::pow(x, k_idx),
+                      pow_cos_psi = dr::pow(cos_psi, j_idx),
+                      sun_rad = dr::gather<SpecArray>(m_sun_radiance, global_idx, active);
+
+            solar_radiance = dr::sum(pow_x * pow_cos_psi * sun_rad);
 #else
             for (uint8_t k = 0; k < NB_SUN_CTRL_PTS; ++k) {
                 for (uint8_t j = 0; j < NB_SUN_LD_PARAMS; ++j) {

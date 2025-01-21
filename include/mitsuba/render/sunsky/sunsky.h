@@ -123,6 +123,22 @@ NAMESPACE_BEGIN(mitsuba)
             res += coefs[ctrl_pt] * dr::pow(x, ctrl_pt) * dr::pow(1 - x, (NB_SKY_CTRL_PTS - 1) - ctrl_pt) * data;
         }
 
+// Alternative implementation to avoid the for loop
+// Although the dataset would need to be changed to
+// (TURBIDITY, ALBEDO, CHANNELS, [SKY_PARAMS,] SKY_CTRL_PTS)
+#if 0
+        using UIntArray = dr::Array<UInt32Storage, NB_SKY_CTRL_PTS>;
+        using FloatArray = dr::Array<FloatStorage, NB_SKY_CTRL_PTS>;
+        UIntArray idx = dr::arange<UIntArray>(NB_SKY_CTRL_PTS);
+        FloatArray x_pow = dr::pow(x, idx),
+                   one_minus_x_pow = dr::pow(1 - x, (NB_SKY_CTRL_PTS - 1) - idx),
+                   ctrl_pts = dr::gather<FloatArray>(dataset, indices),
+                   temp = x_pow * one_minus_x_pow * ctrl_pts;
+
+        FloatStorage temp_res = 1  * temp[0] + 5 * temp[1] + 10 * temp[2] +
+                                10 * temp[3] + 5 * temp[4] + 1  * temp[5];
+#endif
+
         return res;
     }
 
