@@ -86,8 +86,7 @@ public:
         init_from_props(props);
 
         // ================= UPDATE ANGLES =================
-        Vector3f local_sun_dir = dr::normalize(
-                    m_to_world.value().inverse().transform_affine(m_sun_dir));
+        Vector3f local_sun_dir = m_to_world.value().inverse().transform_affine(m_sun_dir);
 
         m_sun_angles = from_spherical(local_sun_dir);
         m_local_sun_frame = Frame3f(local_sun_dir);
@@ -253,16 +252,20 @@ public:
     void traverse(TraversalCallback *callback) override {
         Base::traverse(callback);
         callback->put_parameter("turbidity", m_turbidity, +ParamFlags::Differentiable);
-        callback->put_parameter("sun_direction", m_sun_dir, +ParamFlags::Differentiable);
         callback->put_parameter("sky_scale", m_sky_scale, +ParamFlags::NonDifferentiable);
         callback->put_parameter("sun_scale", m_sun_scale, +ParamFlags::NonDifferentiable);
         callback->put_object("albedo", m_albedo.get(), +ParamFlags::NonDifferentiable);
+        if (m_active_record) {
+            callback->put_parameter("hour", m_time.hour, +ParamFlags::Differentiable);
+        } else {
+            callback->put_parameter("sun_direction", m_sun_dir, +ParamFlags::Differentiable);
+        }
     }
 
     void parameters_changed(const std::vector<std::string> &keys) override {
         const bool turbidity_changed = string::contains(keys, "turbidity");
         const bool albedo_changed    = string::contains(keys, "albedo");
-        const bool sun_dir_changed   = string::contains(keys, "sun_direction");
+        const bool sun_dir_changed   = string::contains(keys, "sun_direction") || string::contains(keys, "hour");
 
         // Reassigns array and "destroys" the gradient flow
         // m_turbidity = dr::clip(m_turbidity, 1.f, 10.f);
@@ -272,9 +275,13 @@ public:
 
         // Update sun angles
         if (sun_dir_changed) {
-            Vector3f local_sun_dir = dr::normalize(
-                    m_to_world.value().inverse().transform_affine(m_sun_dir));
-
+            Vector3f local_sun_dir;
+            if (m_active_record) {
+                local_sun_dir = compute_sun_coordinates(m_time, m_location);
+                m_sun_dir = m_to_world.value().transform_affine(local_sun_dir);
+            } else {
+                local_sun_dir = m_to_world.value().inverse().transform_affine(m_sun_dir);
+            }
             m_sun_angles = from_spherical(local_sun_dir);
             m_local_sun_frame = Frame3f(local_sun_dir);
         }
@@ -373,10 +380,6 @@ private:
         const dr::mask_t<Spec>& active) const {
 
         // Gather coefficients for the skylight equation
-        //Spec coefs[NB_SKY_PARAMS];
-        //for (uint8_t i = 0; i < NB_SKY_PARAMS; ++i)
-        //    coefs[i] = dr::gather<Spec>(m_sky_params, channel_idx * NB_SKY_PARAMS + i, active);
-
         using SpecSkyParams = dr::Array<Spec, NB_SKY_PARAMS>;
         SpecSkyParams coefs = dr::gather<SpecSkyParams>(m_sky_params, channel_idx, active);
 
@@ -825,9 +828,9 @@ private:
     BoundingSphere3f m_bsphere;
 
     Float m_turbidity;
-    Float m_sky_scale;
-    Float m_sun_scale;
     Float m_sky_sampling_w;
+    ScalarFloat m_sky_scale;
+    ScalarFloat m_sun_scale;
 
     ref<Texture> m_albedo;
 
@@ -836,7 +839,7 @@ private:
     Point2f m_sun_angles;
     Frame3f m_local_sun_frame;
     ScalarFloat m_sun_half_aperture;
-    bool m_active_record = false;
+    bool m_active_record;
     LocationRecord<Float> m_location;
     DateTimeRecord<Float> m_time;
 
