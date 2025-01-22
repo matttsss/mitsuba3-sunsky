@@ -342,10 +342,10 @@ public:
             << "  albedo = " << string::indent(m_albedo) << std::endl
             << "  sun aperture (°) = " << string::indent(dr::rad_to_deg(2 * m_sun_half_aperture)) << std::endl;
         if (m_active_record) {
-            oss << "  sun_dir = " << string::indent(m_sun_dir) << std::endl;
-        } else {
             oss << "  location = " << m_location.to_string() << std::endl
                 << "  date_time = " << m_time.to_string() << std::endl;
+        } else {
+            oss << "  sun_dir = " << string::indent(m_sun_dir) << std::endl;
         }
         oss << "]";
         return oss.str();

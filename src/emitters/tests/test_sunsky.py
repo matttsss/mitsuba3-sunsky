@@ -15,7 +15,17 @@ SPECIAL_ALBEDO = {
     'values': '0.56, 0.21, 0.58, 0.24, 0.92, 0.42, 0.53, 0.75, 0.54, 0.20, 0.46'
 }
 
-def make_emitter(turb, sun_phi, sun_theta, albedo, sky_scale, sun_scale):
+def make_emitter_hour(turb, hour, albedo, sky_scale, sun_scale):
+    return mi.load_dict({
+        "type": "sunsky",
+        "hour": hour,
+        "sun_scale": sun_scale,
+        "sky_scale": sky_scale,
+        "turbidity": turb,
+        "albedo": albedo
+    })
+
+def make_emitter_angles(turb, sun_phi, sun_theta, albedo, sky_scale, sun_scale):
     sp_sun, cp_sun = dr.sincos(sun_phi)
     st, ct = dr.sincos(sun_theta)
 
@@ -57,14 +67,22 @@ def generate_and_compare(render_params, ref_path, rtol):
     :param rtol: Relative error tolerance
     """
     render_res = (512//2, 512)
-    sun_eta, turb, albedo = render_params
 
-    plugin = make_emitter(turb=turb,
-                          sun_phi=0,
-                          sun_theta=dr.pi/2 - sun_eta,
-                          albedo=albedo,
-                          sun_scale=0.0,
-                          sky_scale=1.0)
+    if mi.is_rgb:
+        hour, turb, albedo = render_params
+        plugin = make_emitter_hour(turb=turb,
+                                   hour=hour,
+                                   albedo=albedo,
+                                   sun_scale=0.0,
+                                   sky_scale=1.0)
+    else:
+        sun_eta, turb, albedo = render_params
+        plugin = make_emitter_angles(turb=turb,
+                                     sun_phi=0,
+                                     sun_theta=dr.pi/2 - sun_eta,
+                                     albedo=albedo,
+                                     sun_scale=0.0,
+                                     sky_scale=1.0)
 
     # Generate the wavelengths
     start, end = 360, 830
@@ -95,14 +113,14 @@ def generate_and_compare(render_params, ref_path, rtol):
 
 
 @pytest.mark.parametrize("render_params", [
-    (dr.deg2rad(2), 2, 0.2),
-    (dr.deg2rad(20), 5.2, 0.0),
-    (dr.deg2rad(45), 9.8, 0.5),
+    (9.5, 2, 0.2),
+    (12.25, 5.2, 0.0),
+    (18.3, 9.8, 0.5),
 ])
 def test01_sky_radiance_rgb(variants_vec_rgb, render_params):
-    sun_eta, turb, albedo = render_params
+    hour, turb, albedo = render_params
 
-    ref_path = f"resources/sunsky/test_data/renders/sky_rgb_eta{sun_eta:.3f}_t{turb:.3f}_a{albedo:.3f}.exr"
+    ref_path = f"resources/sunsky/test_data/renders/sky_rgb_hour{hour:.2f}_t{turb:.3f}_a{albedo:.3f}.exr"
     generate_and_compare(render_params, ref_path, 0.005)
 
 
@@ -159,7 +177,7 @@ def test04_sun_radiance(variants_vec_spectral, turb, eta_ray, gamma):
     if sun_theta < 0:
         sun_theta = theta_ray + gamma
 
-    plugin = make_emitter(turb=turb,
+    plugin = make_emitter_angles(turb=turb,
                           sun_phi=phi,
                           sun_theta=sun_theta,
                           albedo=0.0,
@@ -197,7 +215,7 @@ def test05_sun_sampling(variants_vec_backends_once, sun_theta):
     st, ct = dr.sincos(sun_theta)
     sun_dir = mi.Vector3f(cp * st, sp * st, ct)
 
-    plugin = make_emitter(turb=4.0,
+    plugin = make_emitter_angles(turb=4.0,
                           sun_phi=sun_phi,
                           sun_theta=sun_theta,
                           albedo=0.0,

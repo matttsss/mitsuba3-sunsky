@@ -208,10 +208,9 @@ NAMESPACE_BEGIN(mitsuba)
     template<typename Float>
     struct DateTimeRecord {
         using Int32 = dr::int32_array_t<Float>;
-        using UInt32 = dr::uint32_array_t<Float>;
         Int32 year;
-        UInt32 month;
-        UInt32 day;
+        Int32 month;
+        Int32 day;
         Float hour;
         Float minute;
         Float second;
@@ -341,7 +340,7 @@ NAMESPACE_BEGIN(mitsuba)
             elevation += (EARTH_MEAN_RADIUS / ASTRONOMICAL_UNIT) * dr::sin(elevation);
         }
 
-        return to_spherical<Float>({azimuth, elevation});
+        return to_spherical<Float>({azimuth - dr::Pi<Float>, elevation});
     }
 
     /**
