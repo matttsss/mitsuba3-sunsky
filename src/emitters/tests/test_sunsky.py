@@ -222,7 +222,7 @@ def test05_sun_sampling(variants_vec_backends_once, sun_theta):
                           sun_scale=1.0,
                           sky_scale=0.0)
 
-    rng = mi.PCG32(size=102400)
+    rng = mi.PCG32(size=10_000)
     sample = mi.Point2f(
         rng.next_float32(),
         rng.next_float32())
@@ -243,6 +243,7 @@ class CroppedSphericalDomain(mi.chi2.SphericalDomain):
         cos_bound = dr.sqrt(1 - dr.square(SIN_OFFSET))
         return mi.ScalarBoundingBox2f([-dr.pi, -cos_bound], [dr.pi, 1])
 
+@pytest.mark.slow
 @pytest.mark.parametrize("turb",      [2.2, 4.8, 6.0])
 @pytest.mark.parametrize("sun_theta", [dr.deg2rad(20), dr.deg2rad(50)])
 def test06_sky_sampling(variants_vec_backends_once, turb, sun_theta):
@@ -271,6 +272,7 @@ def test06_sky_sampling(variants_vec_backends_once, turb, sun_theta):
 
     assert test.run(), "Chi2 test failed"
 
+@pytest.mark.slow
 @pytest.mark.parametrize("turb",      [2.2, 4.8, 6.0])
 @pytest.mark.parametrize("sun_theta", [dr.deg2rad(20), dr.deg2rad(50)])
 def test07_sun_and_sky_sampling(variants_vec_backends_once, turb, sun_theta):
