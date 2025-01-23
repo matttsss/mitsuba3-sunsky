@@ -97,7 +97,8 @@ NAMESPACE_BEGIN(mitsuba)
     }
 
     /**
-     * Computes the Gaussian CDF for the given mean and standard deviation
+     * \brief Computes the Gaussian CDF for the given mean and standard deviation
+     *
      * @tparam Value Type to compute on
      * @param mu Mean of the gaussian
      * @param sigma Standard deviation of the gaussian
@@ -142,22 +143,6 @@ NAMESPACE_BEGIN(mitsuba)
             res += coefs[ctrl_pt] * dr::pow(x, ctrl_pt) * dr::pow(1 - x, (NB_SKY_CTRL_PTS - 1) - ctrl_pt) * data;
         }
 
-// Alternative implementation to avoid the for loop
-// Although the dataset would need to be changed to
-// (TURBIDITY, ALBEDO, CHANNELS, [SKY_PARAMS,] SKY_CTRL_PTS)
-#if 0
-        using UIntArray = dr::Array<UInt32Storage, NB_SKY_CTRL_PTS>;
-        using FloatArray = dr::Array<FloatStorage, NB_SKY_CTRL_PTS>;
-        UIntArray idx = dr::arange<UIntArray>(NB_SKY_CTRL_PTS);
-        FloatArray x_pow = dr::pow(x, idx),
-                   one_minus_x_pow = dr::pow(1 - x, (NB_SKY_CTRL_PTS - 1) - idx),
-                   ctrl_pts = dr::gather<FloatArray>(dataset, indices),
-                   temp = x_pow * one_minus_x_pow * ctrl_pts;
-
-        FloatStorage temp_res = 1  * temp[0] + 5 * temp[1] + 10 * temp[2] +
-                                10 * temp[3] + 5 * temp[4] + 1  * temp[5];
-#endif
-
         return res;
     }
 
@@ -189,7 +174,6 @@ NAMESPACE_BEGIN(mitsuba)
         UInt32 t_high = dr::floor2int<UInt32>(turbidity),
                t_low = t_high - 1;
 
-        // TODO gradient breaks here
         Float t_rem = turbidity - t_high;
 
         // Compute block sizes for each parameter to facilitate indexing
@@ -358,6 +342,24 @@ NAMESPACE_BEGIN(mitsuba)
         }
 
         return to_spherical<Float>({azimuth - dr::Pi<Float>, elevation});
+    }
+
+    /**
+     * \brief Computes the cosine of the angle made between the sun's radius and the viewing direction
+     *
+     * @tparam Value Type to compute on
+     * @param gamma Angle between the sun's center and the viewing direction
+     * @param sun_half_aperture Half aperture angle of the sun
+     * @return The cosine of the angle between the sun's radius and the viewing direction
+     */
+    template <typename Value>
+    MI_INLINE Value compute_cos_psi(const Value& gamma, const Value& sun_half_aperture) {
+        const Value sol_rad_sin = dr::sin(sun_half_aperture),
+                    ar2 = 1 / (sol_rad_sin * sol_rad_sin),
+                    singamma = dr::sin(gamma),
+                    sc2 = 1.0 - ar2 * singamma * singamma;
+
+        return dr::safe_sqrt(sc2);
     }
 
     /**

@@ -130,7 +130,6 @@ public:
         /* Until `set_scene` is called, we have no information
         about the scene and default to the unit bounding sphere. */
         m_bsphere = BoundingSphere3f(ScalarPoint3f(0.f), 1.f);
-        m_surface_area = 4.f * dr::Pi<Float>;
 
         m_flags = +EmitterFlags::Infinite | +EmitterFlags::SpatiallyVarying;
     }
@@ -246,65 +245,62 @@ public:
         callback->put_parameter("turbidity", m_turbidity, +ParamFlags::Differentiable);
         callback->put_parameter("sky_scale", m_sky_scale, +ParamFlags::NonDifferentiable);
         callback->put_parameter("sun_scale", m_sun_scale, +ParamFlags::NonDifferentiable);
-        callback->put_object("albedo", m_albedo.get(), +ParamFlags::NonDifferentiable);
+        callback->put_object("albedo", m_albedo.get(), +ParamFlags::Differentiable);
         if (m_active_record) {
-            callback->put_parameter("hour", m_time.hour, +ParamFlags::Differentiable);
+            callback->put_parameter("latitude", m_location.latitude, +ParamFlags::NonDifferentiable);
+            callback->put_parameter("longitude", m_location.longitude, +ParamFlags::NonDifferentiable);
+            callback->put_parameter("timezone", m_location.timezone, +ParamFlags::NonDifferentiable);
+            callback->put_parameter("year", m_time.year, +ParamFlags::NonDifferentiable);
+            callback->put_parameter("day", m_time.day, +ParamFlags::NonDifferentiable);
+            callback->put_parameter("month", m_time.month, +ParamFlags::NonDifferentiable);
+            callback->put_parameter("hour", m_time.hour, +ParamFlags::NonDifferentiable);
+            callback->put_parameter("minute", m_time.minute, +ParamFlags::NonDifferentiable);
+            callback->put_parameter("second", m_time.second, +ParamFlags::NonDifferentiable);
         } else {
             callback->put_parameter("sun_direction", m_sun_dir, +ParamFlags::Differentiable);
         }
     }
 
-    void parameters_changed(const std::vector<std::string> &keys) override {
-        const bool turbidity_changed = string::contains(keys, "turbidity");
-        const bool albedo_changed    = string::contains(keys, "albedo");
-        const bool sun_dir_changed   = string::contains(keys, "sun_direction") || string::contains(keys, "hour");
-
-        // Reassigns array and "destroys" the gradient flow
-        // m_turbidity = dr::clip(m_turbidity, 1.f, 10.f);
-        dr::set_label(m_turbidity, "turbidity");
+    void parameters_changed(const std::vector<std::string> & /*unused*/) override {
+        if (m_sun_scale < 0.f)
+            Log(Error, "Invalid sun scale: %f, must be positive!", m_sun_scale);
+        if (m_sky_scale < 0.f)
+            Log(Error, "Invalid sky scale: %f, must be positive!", m_sky_scale);
+        if (dr::any(m_turbidity < 1.f || 10.f < m_turbidity))
+            Log(Error, "Turbidity value %f is out of range [1, 10]", m_turbidity);
+        if (m_sun_half_aperture <= 0.f || 0.5f * dr::Pi<Float> <= m_sun_half_aperture)
+            Log(Error, "Invalid sun aperture angle: %f, must be in ]0, 90[ degrees!", dr::rad_to_deg(2 * m_sun_half_aperture));
+        if (m_albedo->is_spatially_varying())
+            Log(Error, "Expected a non-spatially varying radiance spectra!");
 
         FloatStorage albedo = extract_albedo(m_albedo);
 
         // Update sun angles
-        if (sun_dir_changed) {
-            Vector3f local_sun_dir;
-            if (m_active_record) {
-                local_sun_dir = compute_sun_coordinates(m_time, m_location);
-                m_sun_dir = m_to_world.value().transform_affine(local_sun_dir);
-            } else {
-                local_sun_dir = m_to_world.value().inverse().transform_affine(m_sun_dir);
-            }
-            m_sun_angles = from_spherical(local_sun_dir);
-            m_local_sun_frame = Frame3f(local_sun_dir);
+        Vector3f local_sun_dir;
+        if (m_active_record) {
+            local_sun_dir = compute_sun_coordinates(m_time, m_location);
+            m_sun_dir = m_to_world.value().transform_affine(local_sun_dir);
+        } else {
+            local_sun_dir = m_to_world.value().inverse().transform_affine(m_sun_dir);
         }
+        m_sun_angles = from_spherical(local_sun_dir);
+        m_local_sun_frame = Frame3f(local_sun_dir);
 
         Float eta = 0.5f * dr::Pi<Float> - m_sun_angles.y();
 
         // Update sky
-        if (turbidity_changed || albedo_changed || sun_dir_changed) {
-            m_sky_params = compute_radiance_params<SKY_DATASET_SIZE>(m_sky_dataset, albedo, m_turbidity, eta);
-            m_sky_radiance = compute_radiance_params<SKY_DATASET_RAD_SIZE>(m_sky_rad_dataset, albedo, m_turbidity, eta);
-        }
+        m_sky_params = compute_radiance_params<SKY_DATASET_SIZE>(m_sky_dataset, albedo, m_turbidity, eta);
+        m_sky_radiance = compute_radiance_params<SKY_DATASET_RAD_SIZE>(m_sky_rad_dataset, albedo, m_turbidity, eta);
 
         // Update sun
-        if (turbidity_changed)
-            m_sun_radiance = compute_sun_params<SUN_DATASET_SIZE>(m_sun_rad_dataset, m_turbidity);
-
+        m_sun_radiance = compute_sun_params<SUN_DATASET_SIZE>(m_sun_rad_dataset, m_turbidity);
 
         // Update TGMM
-        if (turbidity_changed || sun_dir_changed) {
-            const auto [gaussian_params, mis_weights] = compute_tgmm_distribution<TGMM_DATA_SIZE>(m_tgmm_tables, m_turbidity, eta);
-            m_gaussians = gaussian_params;
-            m_gaussian_distr = DiscreteDistribution<Float>(mis_weights);
-        }
+        const auto [gaussian_params, mis_weights] = compute_tgmm_distribution<TGMM_DATA_SIZE>(m_tgmm_tables, m_turbidity, eta);
+        m_gaussians = gaussian_params;
+        m_gaussian_distr = DiscreteDistribution<Float>(mis_weights);
 
         m_sky_sampling_w = estimate_sky_sun_ratio();
-
-        dr::set_label(m_sky_params, "sky_params");
-        dr::set_label(m_sky_radiance, "sky_radiance");
-        dr::set_label(m_sun_radiance, "sun_radiance");
-        dr::set_label(m_gaussians, "gaussian_params");
-        dr::set_label(m_sky_sampling_w, "sky sampling weight");
     }
 
     void set_scene(const Scene *scene) override {
@@ -319,9 +315,8 @@ public:
             m_bsphere.center = 0.f;
             m_bsphere.radius = math::RayEpsilon<Float>;
         }
-        m_surface_area = 4.f * dr::Pi<ScalarFloat> * dr::square(m_bsphere.radius);
 
-        dr::make_opaque(m_bsphere.center, m_bsphere.radius, m_surface_area);
+        dr::make_opaque(m_bsphere.center, m_bsphere.radius);
     }
 
 
@@ -429,58 +424,16 @@ private:
             // Reproduces the spectral equation above but distributes the product of sums
             // since it uses interpolated coefficients from the spectral dataset
 
-            // Angles computation
-            //Float64 sin_gamma_sqr      = dr::fnmadd(cos_gamma, cos_gamma, 1.f),
-            //        sin_sun_cutoff_sqr = dr::fnmadd(SUN_COS_CUTOFF, SUN_COS_CUTOFF, 1.f);
-            //Float64 cos_psi = dr::safe_sqrt(1 - sin_gamma_sqr / sin_sun_cutoff_sqr);
-
-            const ScalarFloat64 sol_rad_sin = dr::sin(m_sun_half_aperture);
-            const ScalarFloat64 ar2 = 1 / ( sol_rad_sin * sol_rad_sin );
-            const Float64 singamma = (Float64) dr::sin(gamma);
-            const Float64 sc2 = 1.0 - ar2 * singamma * singamma;
-            const Float cos_psi = dr::safe_sqrt(sc2);
-
+            const Float cos_psi = compute_cos_psi<Float>(gamma, m_sun_half_aperture);
             SpecUInt32 global_idx = pos * (3 * NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS) +
                                     channel_idx * (NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS);
 
-#if 0
-            UInt32 k_ = 0, j_ = 0;
-            std::tie(k_, j_, solar_radiance) = dr::while_loop(
-                std::make_tuple(k_, j_, solar_radiance),
-                [](const UInt32& k, const UInt32&, const Spec&) {
-                    return k < NB_SUN_CTRL_PTS;
-                },
-                [&](UInt32& k, UInt32& j, Spec& solar_radiance_) {
-                    solar_radiance_ += dr::pow(x, k) * dr::pow(cos_psi, j) *
-                                      dr::gather<Spec>(m_sun_radiance, global_idx + k * NB_SUN_LD_PARAMS + j, active);
-
-                    j += 1;
-                    k = dr::select(j == NB_SUN_LD_PARAMS, k + 1, k);
-                    j = dr::select(j == NB_SUN_LD_PARAMS, 0, j);
-                },
-                "Sun radiance computation"
-            );
-#elif 0
-            using SpecArray = dr::Array<Spec, NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS>;
-            using UInt32Array = dr::Array<UInt32, NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS>;
-
-            UInt32Array idx = dr::arange<UInt32Array>(NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS),
-                        k_idx = idx / NB_SUN_LD_PARAMS,
-                        j_idx = idx % NB_SUN_LD_PARAMS;
-
-            SpecArray pow_x = dr::pow(x, k_idx),
-                      pow_cos_psi = dr::pow(cos_psi, j_idx),
-                      sun_rad = dr::gather<SpecArray>(m_sun_radiance, global_idx, active);
-
-            solar_radiance = dr::sum(pow_x * pow_cos_psi * sun_rad);
-#else
             for (uint8_t k = 0; k < NB_SUN_CTRL_PTS; ++k) {
                 for (uint8_t j = 0; j < NB_SUN_LD_PARAMS; ++j) {
                     solar_radiance += dr::pow(x, k) * dr::pow(cos_psi, j) *
                                       dr::gather<Spec>(m_sun_radiance, global_idx + k * NB_SUN_LD_PARAMS + j, active);
                 }
             }
-#endif
         }
 
         return solar_radiance & active;
@@ -514,16 +467,7 @@ private:
                     sun_ld_high = dr::gather<SpecLdArray>(m_sun_ld, channel_idx_high, active),
                     sun_ld_coefs = dr::lerp(sun_ld_low, sun_ld_high, lerp_f);
 
-        // Angles computation
-        //Float64 sin_gamma_sqr      = dr::fnmadd(cos_gamma, cos_gamma, 1.f),
-        //        sin_sun_cutoff_sqr = dr::fnmadd(SUN_COS_CUTOFF, SUN_COS_CUTOFF, 1.f);
-        //Float64 cos_psi = dr::safe_sqrt(1 - sin_gamma_sqr / sin_sun_cutoff_sqr);
-
-        const ScalarFloat64 sol_rad_sin = dr::sin(m_sun_half_aperture);
-        const ScalarFloat64 ar2 = 1 / ( sol_rad_sin * sol_rad_sin );
-        const Float64 singamma = dr::sin(gamma);
-        const Float64 sc2 = 1.0 - ar2 * singamma * singamma;
-        const Float cos_psi = dr::safe_sqrt(sc2);
+        const Float cos_psi = compute_cos_psi<Float>(gamma, m_sun_half_aperture);
 
         Spec sun_ld = 0.f;
         for (uint8_t j = 0; j < NB_SUN_LD_PARAMS; ++j)
@@ -650,7 +594,8 @@ private:
             }
         }
 
-        albedo = dr::clip(albedo, 0.f, 1.f);
+        if (dr::any(albedo < 0.f || albedo > 1.f))
+            Log(Error, "Albedo values must be in [0, 1], got: %f", albedo);
 
         return albedo;
     }
@@ -753,25 +698,25 @@ private:
     void init_from_props(const Properties& props) {
         m_sun_scale = props.get<ScalarFloat>("sun_scale", 1.f);
         if (m_sun_scale < 0.f)
-            Throw("Invalid sun scale, must be positive!");
+            Log(Error, "Invalid sun scale: %f, must be positive!", m_sun_scale);
 
         m_sky_scale = props.get<ScalarFloat>("sky_scale", 1.f);
         if (m_sky_scale < 0.f)
-            Throw("Invalid sky scale, must be positive!");
+            Log(Error, "Invalid sky scale: %f, must be positive!", m_sky_scale);
 
         ScalarFloat turb = props.get<ScalarFloat>("turbidity", 3.f);
         if (turb < 1.f || 10.f < turb)
-            Throw("Invalid turbidity, must be in [1, 10]!");
+            Log(Error, "Turbidity value %f is out of range [1, 10]", turb);
         m_turbidity = turb;
         dr::make_opaque(m_turbidity);
 
         m_sun_half_aperture = dr::deg_to_rad(0.5f * props.get<ScalarFloat>("sun_aperture", 0.5358));
         if (m_sun_half_aperture <= 0.f || 0.5f * dr::Pi<Float> <= m_sun_half_aperture)
-            Throw("Invalid sun aperture angle, must be in ]0, 90[ degrees!");
+            Log(Error, "Invalid sun aperture angle: %f, must be in ]0, 90[ degrees!", dr::rad_to_deg(2 * m_sun_half_aperture));
 
         m_albedo = props.texture<Texture>("albedo", 1.f);
         if (m_albedo->is_spatially_varying())
-            Throw("Expected a non-spatially varying radiance spectra!");
+            Log(Error, "Expected a non-spatially varying radiance spectra!");
 
         if (props.has_property("sun_direction")) {
             if (props.has_property("latitude") || props.has_property("longitude")
@@ -821,7 +766,6 @@ private:
 
     FullSpectrum c_wavelengths;
 
-    Float m_surface_area;
     BoundingSphere3f m_bsphere;
 
     Float m_turbidity;
