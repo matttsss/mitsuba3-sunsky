@@ -11,25 +11,71 @@ NAMESPACE_BEGIN(mitsuba)
 
 /**!
 
-.. _emitter-constant:
+.. _emitter-sunsky:
 
-Constant environment emitter (:monosp:`constant`)
+Sun and Sky emitter (:monosp:`sunsky`)
 -------------------------------------------------
 
 .. pluginparameters::
  * - turbidity
    - |float|
-   - Atmosphere turbidity (Default: 3, clear sky in a temperate climate).
+   - Atmosphere turbidity, must be within [1, 10] (Default: 3, clear sky in a temperate climate).
    - |exposed|, |differentiable|
 
  * - albedo
    - |float| or |spectrum|
-   - Ground albedo (Default: 0.3).
+   - Ground albedo, must be within [0, 1] for each wavelength/channel (Default: 0.3).
+   - |exposed|, |differentiable|
+
+ * - latitude
+   - |float|
+   - Latitude of the location in degrees (Default: 35.689, Tokyo's latitude).
    - |exposed|
+
+ * - longitude
+    - |float|
+    - Longitude of the location in degrees (Default: 139.6917, Tokyo's longitude).
+    - |exposed|
+
+ * - timezone
+    - |float|
+    - Timezone of the location in hours (Default: 9).
+    - |exposed|
+
+ * - year
+    - |integer|
+    - Year (Default: 2010).
+    - |exposed|
+
+ * - month
+    - |integer|
+    - Month (Default: 7).
+    - |exposed|
+
+ * - day
+    - |integer|
+    - Day (Default: 10).
+    - |exposed|
+
+ * - hour
+    - |float|
+    - Hour (Default: 15).
+    - |exposed|
+
+ * - minute
+    - |float|
+    - Minute (Default: 0).
+    - |exposed|
+
+ * - second
+    - |float|
+    - Second (Default: 0).
+    - |exposed|
 
  * - sun_direction
    - |vector|
-   - Direction of the sun in the sky (No defaults).
+   - Direction of the sun in the sky (No defaults),
+     cannot be specified along with one of the location/time parameters.
    - |exposed|, |differentiable|
 
  * - sun_scale
@@ -40,6 +86,11 @@ Constant environment emitter (:monosp:`constant`)
  * - sky_scale
    - |float|
    - Scale factor for the sky radiance (Default: 1).
+   - |exposed|
+
+ * - sun_aperture
+   - |float|
+   - Aperture angle of the sun in degrees (Default: 0.5338, normal sun aperture).
    - |exposed|
 
 This plugin implements an environment emitter for the sun and sky dome.
@@ -714,7 +765,7 @@ private:
         if (m_sun_half_aperture <= 0.f || 0.5f * dr::Pi<Float> <= m_sun_half_aperture)
             Log(Error, "Invalid sun aperture angle: %f, must be in ]0, 90[ degrees!", dr::rad_to_deg(2 * m_sun_half_aperture));
 
-        m_albedo = props.texture<Texture>("albedo", 1.f);
+        m_albedo = props.texture<Texture>("albedo", 0.2f);
         if (m_albedo->is_spatially_varying())
             Log(Error, "Expected a non-spatially varying radiance spectra!");
 
