@@ -154,9 +154,7 @@ public:
             const SpecUInt32 idx = SpecUInt32({0, 1, 2});
 
             res = m_sky_scale * render_sky<Spectrum>(idx, cos_theta, gamma, active);
-
-            // FIXME: explain this constant
-            res += m_sun_scale * render_sun<Spectrum>(idx, cos_theta, gamma, hit_sun) * 467.069280386 * get_area_ratio(m_sun_half_aperture);
+            res += m_sun_scale * render_sun<Spectrum>(idx, cos_theta, gamma, hit_sun) * get_area_ratio(m_sun_half_aperture) * SPEC_TO_RGB_SUN_CONV;
 
             res *= MI_CIE_Y_NORMALIZATION;
 
@@ -534,10 +532,6 @@ private:
         return sun_ld & active;
     }
 
-    MI_INLINE Point2f gaussian_cdf(const Point2f& mu, const Point2f& sigma, const Point2f& x) const {
-        return 0.5f * (1 + dr::erf(dr::InvSqrtTwo<Float> * (x - mu) / sigma));
-    }
-
     /**
      * Samples the sky from the truncated gaussian mixture with the given sample
      * Based on the Truncated Gaussian Mixture Model (TGMM) for sky dome by N. Vitsas and K. Vardis
@@ -743,7 +737,7 @@ private:
             Float sky_lum = m_sky_scale, sun_lum = m_sun_scale;
             if constexpr (is_rgb_v<Spectrum>) {
                 sky_lum *= luminance(sky_radiance);
-                sun_lum *= luminance(sun_radiance) * 467.069280386 * get_area_ratio(m_sun_half_aperture);
+                sun_lum *= luminance(sun_radiance) * get_area_ratio(m_sun_half_aperture) * SPEC_TO_RGB_SUN_CONV;
             } else {
                 sky_lum *= luminance(sky_radiance, c_wavelengths);
                 sun_lum *= luminance(sun_radiance, c_wavelengths) * get_area_ratio(m_sun_half_aperture);

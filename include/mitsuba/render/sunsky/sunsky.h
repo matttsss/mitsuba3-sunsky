@@ -56,6 +56,11 @@ NAMESPACE_BEGIN(mitsuba)
     /// Astronomical unit
     #define ASTRONOMICAL_UNIT 149597890 // In km
 
+    // Fixme: find the reason for this constant
+
+    /// Conversion constant to convert spectral solar luminosity to RGB
+    #define SPEC_TO_RGB_SUN_CONV 467.069280386
+
 
     // ================================================================================================
     // ====================================== HELPER FUNCTIONS ========================================
@@ -91,6 +96,18 @@ NAMESPACE_BEGIN(mitsuba)
         return (1 - dr::cos(SUN_HALF_APERTURE)) / (1 - dr::cos(custom_half_aperture));
     }
 
+    /**
+     * Computes the Gaussian CDF for the given mean and standard deviation
+     * @tparam Value Type to compute on
+     * @param mu Mean of the gaussian
+     * @param sigma Standard deviation of the gaussian
+     * @param x Point to evaluate
+     * @return The Gaussian Cumulative Distribution Function at x
+     */
+    template <typename Value>
+    MI_INLINE Value gaussian_cdf(const Value& mu, const Value& sigma, const Value& x) {
+        return 0.5f * (1 + dr::erf(dr::InvSqrtTwo<Value> * (x - mu) / sigma));
+    }
 
     // ================================================================================================
     // ========================================== SKY MODEL ===========================================
