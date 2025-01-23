@@ -103,12 +103,14 @@ NAMESPACE_BEGIN(mitsuba)
      * @param out_size Size of the data to interpolate
      * @param offset Offset to apply to the indices
      * @param x Interpolation factor
+     * @param active Indicates if the offsets are valid
      * @return Interpolated data
      */
     template <typename Float>
     DynamicBuffer<Float> bezier_interpolate(
         const DynamicBuffer<Float>& dataset, const uint32_t out_size,
-        const dr::uint32_array_t<Float>& offset, const Float& x) {
+        const dr::uint32_array_t<Float>& offset,
+        const Float& x, const dr::mask_t<Float>& active) {
 
         using ScalarFloat = dr::value_t<Float>;
         using FloatStorage = DynamicBuffer<Float>;
@@ -119,7 +121,7 @@ NAMESPACE_BEGIN(mitsuba)
 
         FloatStorage res = dr::zeros<FloatStorage>(out_size);
         for (uint8_t ctrl_pt = 0; ctrl_pt < NB_SKY_CTRL_PTS; ++ctrl_pt) {
-            FloatStorage data = dr::gather<FloatStorage>(dataset, indices + ctrl_pt * out_size);
+            FloatStorage data = dr::gather<FloatStorage>(dataset, indices + ctrl_pt * out_size, active);
             res += coefs[ctrl_pt] * dr::pow(x, ctrl_pt) * dr::pow(1 - x, (NB_SKY_CTRL_PTS - 1) - ctrl_pt) * data;
         }
 
@@ -162,18 +164,16 @@ NAMESPACE_BEGIN(mitsuba)
         using UInt32Storage = DynamicBuffer<UInt32>;
         using FloatStorage = DynamicBuffer<Float>;
 
-        // Clip parameters to valid ranges
-        turbidity = dr::clip(turbidity, 1.f, 10.f);
-        eta = dr::clip(eta, 0.f, 0.5f * dr::Pi<Float>);
+        const dr::mask_t<Float> active = turbidity >= 1 && turbidity <= 10 &&
+                                         eta >= 0 && eta <= 0.5 * dr::Pi<Float>;
 
-        Float x = dr::pow(2 * dr::InvPi<Float> * eta, 1.f/3.f);
+        Float x = dr::cbrt(2 * dr::InvPi<Float> * eta);
 
-        UInt32 t_int = dr::floor2int<UInt32>(turbidity),
-               t_low = dr::maximum(t_int - 1, 0),
-               t_high = dr::minimum(t_low + 1, NB_TURBIDITY - 1);
+        UInt32 t_high = dr::floor2int<UInt32>(turbidity),
+               t_low = t_high - 1;
 
         // TODO gradient breaks here
-        Float t_rem = turbidity - t_int;
+        Float t_rem = turbidity - t_high;
 
         // Compute block sizes for each parameter to facilitate indexing
         const uint32_t t_block_size = dataset_size / NB_TURBIDITY,
@@ -184,18 +184,18 @@ NAMESPACE_BEGIN(mitsuba)
 
         // Interpolate on elevation
         FloatStorage
-            t_low_a_low = bezier_interpolate(dataset, result_size, t_low * t_block_size + 0 * a_block_size, x),
-            t_high_a_low = bezier_interpolate(dataset, result_size, t_high * t_block_size + 0 * a_block_size, x),
-            t_low_a_high = bezier_interpolate(dataset, result_size, t_low * t_block_size + 1 * a_block_size, x),
-            t_high_a_high = bezier_interpolate(dataset, result_size, t_high * t_block_size + 1 * a_block_size, x);
+            t_low_a_low   = bezier_interpolate(dataset, result_size, t_low  * t_block_size + 0 * a_block_size, x, active),
+            t_high_a_low  = bezier_interpolate(dataset, result_size, t_high * t_block_size + 0 * a_block_size, x, active),
+            t_low_a_high  = bezier_interpolate(dataset, result_size, t_low  * t_block_size + 1 * a_block_size, x, active),
+            t_high_a_high = bezier_interpolate(dataset, result_size, t_high * t_block_size + 1 * a_block_size, x, active);
 
         // Interpolate on turbidity
-        FloatStorage res_a_low = dr::lerp(t_low_a_low, t_high_a_low, t_rem),
+        FloatStorage res_a_low  = dr::lerp(t_low_a_low, t_high_a_low, t_rem),
                      res_a_high = dr::lerp(t_low_a_high, t_high_a_high, t_rem);
 
         // Interpolate on albedo
         UInt32Storage idx = dr::arange<UInt32Storage>(nb_params * albedo.size());
-        idx /= nb_params;
+                      idx /= nb_params;
 
         return dr::lerp(res_a_low, res_a_high, dr::gather<FloatStorage>(albedo, idx));
     }
@@ -358,16 +358,17 @@ NAMESPACE_BEGIN(mitsuba)
         using UInt32Storage = DynamicBuffer<dr::uint32_array_t<Float>>;
         using FloatStorage = DynamicBuffer<Float>;
 
-        turbidity = dr::clip(turbidity, 1.f, 10.f);
-        UInt32 t_low = dr::floor2int<UInt32>(turbidity - 1),
-               t_high = t_low + 1;
+        const dr::mask_t<Float> active = turbidity >= 1 && turbidity <= 10;
+
+        UInt32 t_high = dr::floor2int<UInt32>(turbidity),
+               t_low = t_high - 1;
         Float  t_rem = turbidity - t_high;
 
         constexpr uint32_t t_block_size = dataset_size / NB_TURBIDITY;
 
         UInt32Storage idx = dr::arange<UInt32Storage>(t_block_size);
-        return dr::lerp(dr::gather<FloatStorage>(sun_radiance_dataset, t_low * t_block_size + idx, t_low < NB_TURBIDITY),
-                        dr::gather<FloatStorage>(sun_radiance_dataset, t_high * t_block_size + idx, t_high < NB_TURBIDITY),
+        return dr::lerp(dr::gather<FloatStorage>(sun_radiance_dataset, t_low * t_block_size + idx, active),
+                        dr::gather<FloatStorage>(sun_radiance_dataset, t_high * t_block_size + idx, active),
                         t_rem);
     }
 

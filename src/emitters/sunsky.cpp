@@ -410,10 +410,10 @@ private:
         using SpecUInt32 = dr::uint32_array_t<Spec>;
 
         // Angles computation
-        Float elevation =  0.5f * dr::Pi<Float> - dr::acos(cos_theta);
+        Float elevation = 0.5f * dr::Pi<Float> - dr::acos(cos_theta);
 
         // Find the segment of the piecewise function we are in
-        UInt32 pos = dr::floor2int<UInt32>(dr::pow(2 * elevation * dr::InvPi<Float>, 1.f/3.f) * NB_SUN_SEGMENTS);
+        UInt32 pos = dr::floor2int<UInt32>(dr::cbrt(2 * elevation * dr::InvPi<Float>) * NB_SUN_SEGMENTS);
                pos = dr::minimum(pos, NB_SUN_SEGMENTS - 1);
 
         const Float break_x = 0.5f * dr::Pi<Float> * dr::pow((Float)pos / NB_SUN_SEGMENTS, 3.f),
@@ -750,16 +750,25 @@ private:
             }
 
             // Normalize quantities for valid distribution
-            return sky_lum / (sky_lum + sun_lum);
+            const Float res = sky_lum / (sky_lum + sun_lum);
+            return dr::select(dr::isnan(res), 0.0f, res);
         }
     }
 
 
     void init_from_props(const Properties& props) {
         m_sun_scale = props.get<ScalarFloat>("sun_scale", 1.f);
-        m_sky_scale = props.get<ScalarFloat>("sky_scale", 1.f);
+        if (m_sun_scale < 0.f)
+            Throw("Invalid sun scale, must be positive!");
 
-        m_turbidity = props.get<ScalarFloat>("turbidity", 3.f);
+        m_sky_scale = props.get<ScalarFloat>("sky_scale", 1.f);
+        if (m_sky_scale < 0.f)
+            Throw("Invalid sky scale, must be positive!");
+
+        ScalarFloat turb = props.get<ScalarFloat>("turbidity", 3.f);
+        if (turb < 1.f || 10.f < turb)
+            Throw("Invalid turbidity, must be in [1, 10]!");
+        m_turbidity = turb;
         dr::make_opaque(m_turbidity);
 
         m_sun_half_aperture = dr::deg_to_rad(0.5f * props.get<ScalarFloat>("sun_aperture", 0.5358));
