@@ -17,14 +17,16 @@ Sun and Sky emitter (:monosp:`sunsky`)
 -------------------------------------------------
 
 .. pluginparameters::
+
  * - turbidity
    - |float|
    - Atmosphere turbidity, must be within [1, 10] (Default: 3, clear sky in a temperate climate).
    - |exposed|, |differentiable|
 
  * - albedo
-   - |float| or |spectrum|
-   - Ground albedo, must be within [0, 1] for each wavelength/channel (Default: 0.3).
+   - |spectrum|
+   - Ground albedo, must be within [0, 1] for each wavelength/channel, (Default: 0.3).
+     This cannot be spatially varying (e.g. have bitmap as type).
    - |exposed|, |differentiable|
 
  * - latitude
@@ -33,44 +35,44 @@ Sun and Sky emitter (:monosp:`sunsky`)
    - |exposed|
 
  * - longitude
-    - |float|
-    - Longitude of the location in degrees (Default: 139.6917, Tokyo's longitude).
-    - |exposed|
+   - |float|
+   - Longitude of the location in degrees (Default: 139.6917, Tokyo's longitude).
+   - |exposed|
 
  * - timezone
-    - |float|
-    - Timezone of the location in hours (Default: 9).
-    - |exposed|
+   - |float|
+   - Timezone of the location in hours (Default: 9).
+   - |exposed|
 
  * - year
-    - |integer|
-    - Year (Default: 2010).
-    - |exposed|
+   - |int|
+   - Year (Default: 2010).
+   - |exposed|
 
  * - month
-    - |integer|
-    - Month (Default: 7).
-    - |exposed|
+   - |int|
+   - Month (Default: 7).
+   - |exposed|
 
  * - day
-    - |integer|
-    - Day (Default: 10).
-    - |exposed|
+   - |int|
+   - Day (Default: 10).
+   - |exposed|
 
  * - hour
-    - |float|
-    - Hour (Default: 15).
-    - |exposed|
+   - |float|
+   - Hour (Default: 15).
+   - |exposed|
 
  * - minute
-    - |float|
-    - Minute (Default: 0).
-    - |exposed|
+   - |float|
+   - Minute (Default: 0).
+   - |exposed|
 
  * - second
-    - |float|
-    - Second (Default: 0).
-    - |exposed|
+   - |float|
+   - Second (Default: 0).
+   - |exposed|
 
  * - sun_direction
    - |vector|
@@ -81,11 +83,13 @@ Sun and Sky emitter (:monosp:`sunsky`)
  * - sun_scale
    - |float|
    - Scale factor for the sun radiance (Default: 1).
+     Can be used to turn the sun off (by setting it to 0).
    - |exposed|
 
  * - sky_scale
    - |float|
    - Scale factor for the sky radiance (Default: 1).
+     Can be used to turn the sky off (by setting it to 0).
    - |exposed|
 
  * - sun_aperture
@@ -93,26 +97,60 @@ Sun and Sky emitter (:monosp:`sunsky`)
    - Aperture angle of the sun in degrees (Default: 0.5338, normal sun aperture).
    - |exposed|
 
+ * - to_world
+   - |transform|
+   - Specifies an optional emitter-to-world transformation.  (Default: none, i.e. emitter space = world space)
+   - |exposed|
+
 This plugin implements an environment emitter for the sun and sky dome.
-It is based on the Wilkie-Hosek sun and sky model.
+It uses the Hosek-Wilkie sun and sky model to generate strong approximations of the sky-dome without
+the cost of path tracing the atmosphere. For that it uses datasets stored in "resources/data/sunsky/datasets/"
+that are pre-processed on plugin instantiation/parameter-traversal.
+
+Internally, this emitter does not compute a bitmap of the sky-dome like an environment map, but evaluates the irradiance
+when it is needed. Consequently, without a bitmap to sample, sampling is done through a Truncated Gaussian Mixture Model
+pre-fitted to the given parameters.
+
+Users should be aware that given certain parameters, the sun's radiance is ill-represented by the linear sRGB color space.
+Whether Mitsuba is rendering in spectral or RGB mode, if the final output is an sRGB image, it can happen that it contains
+negative pixel values or be over-saturated. These results are left un-clamped to let the user post-process the image
+to his liking, without loosing information.
+
+Note that attaching a sunsky emitter to the scene introduces physical units into the rendering process of Mitsuba 3,
+which is ordinarily a unitless system. Specifically, the evaluated irradiance has units of power (:math:`W`) per
+unit area (:math:`m^{-2}`) per steradian (:math:`sr^{-1}`) per unit wavelength (:math:`nm^{-1}`). As a consequence,
+your scene should be modeled in meters for this plugin to work properly.
 
 .. tabs::
     .. code-tab:: xml
-        :name: constant-light
+        :name: sunsky-light
 
-        <emitter type="constant">
-            <rgb name="radiance" value="1.0"/>
+        <emitter type="sunsky">
+            <float name="hour" value="20.0"/>
         </emitter>
 
     .. code-tab:: python
 
-        'type': 'constant',
-        'radiance': {
-            'type': 'rgb',
-            'value': 1.0,
-        }
+        'type': 'sunsky',
+        'hour': 20.0
 
- */
+Resources
+*********
+
+ - Lukas Hosek and Alexander Wilkie. 2012. An analytic model for full spectral
+   sky-dome radiance. ACM Trans. Graph. 31, 4, Article 95 (July 2012), 9 pages.
+   https://doi.org/10.1145/2185520.2185591
+
+ - Lukáš Hošek and Alexander Wilkie. 2013. Adding a Solar-Radiance Function to
+   the Hošek-Wilkie Skylight Model. IEEE Computer Graphics and Applications 33, 3
+   (2013), 44–52. https://doi.org/10.1109/MCG.2013.18
+
+ - Nick Vitsas, Konstantinos Vardis, and Georgios Papaioannou. 2021. Sampling
+   Clear Sky Models using Truncated Gaussian Mixtures. In Eurographics Symposium
+   on Rendering - DL-only Track, Adrien Bousseau and Morgan McGuire (Eds.). The
+   Eurographics Association. https://doi.org/10.2312/sr.20211288
+
+*/
 
 #define DATABASE_PATH "resources/sunsky/datasets/"
 #define DATABASE_TYPE std::string(is_spectral_v<Spectrum> ? "_spec_" : "_rgb_")
@@ -310,6 +348,7 @@ public:
         } else {
             callback->put_parameter("sun_direction", m_sun_dir, +ParamFlags::Differentiable);
         }
+        callback->put_parameter("to_world", *m_to_world.ptr(), +ParamFlags::NonDifferentiable);
     }
 
     void parameters_changed(const std::vector<std::string> & /*unused*/) override {
