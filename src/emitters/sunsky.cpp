@@ -211,113 +211,8 @@ public:
         about the scene and default to the unit bounding sphere. */
         m_bsphere = BoundingSphere3f(ScalarPoint3f(0.f), 1.f);
 
+        m_d65 = Texture::D65(1.f);
         m_flags = +EmitterFlags::Infinite | +EmitterFlags::SpatiallyVarying;
-    }
-
-    Spectrum eval(const SurfaceInteraction3f &si, Mask active) const override {
-        MI_MASKED_FUNCTION(ProfilerPhase::EndpointEvaluate, active);
-
-        using SpecMask   = dr::mask_t<Spectrum>;
-        using SpecUInt32 = dr::uint32_array_t<Spectrum>;
-
-        Vector3f local_wo = m_to_world.value().inverse().transform_affine(-si.wi);
-        Float cos_theta = Frame3f::cos_theta(local_wo),
-              gamma = dr::unit_angle(Vector3f(m_local_sun_frame.n), local_wo);
-
-        active &= cos_theta >= 0;
-        Mask hit_sun = active & (dr::dot(m_local_sun_frame.n, local_wo) >= dr::cos(m_sun_half_aperture));
-
-        UnpolarizedSpectrum res = 0.f;
-        if constexpr (is_rgb_v<Spectrum>) {
-            const SpecUInt32 idx = SpecUInt32({0, 1, 2});
-
-            res = m_sky_scale * render_sky<Spectrum>(idx, cos_theta, gamma, active);
-            res += m_sun_scale * render_sun<Spectrum>(idx, cos_theta, gamma, hit_sun) * get_area_ratio(m_sun_half_aperture) * SPEC_TO_RGB_SUN_CONV;
-
-            res *= MI_CIE_Y_NORMALIZATION;
-
-        } else {
-            const Spectrum normalized_wavelengths = (si.wavelengths - WAVELENGTHS<ScalarFloat>[0]) / WAVELENGTH_STEP;
-            const SpecMask valid_idx = (0.f <= normalized_wavelengths) & (normalized_wavelengths <= NB_CHANNELS - 1);
-
-            const SpecUInt32 query_idx_low  = dr::floor2int<SpecUInt32>(normalized_wavelengths),
-                             query_idx_high = query_idx_low + 1;
-
-            const Spectrum lerp_factor = normalized_wavelengths - query_idx_low;
-
-            // Linearly interpolate the sky's irradiance across the spectrum
-            res = m_sky_scale * dr::lerp(
-                render_sky<Spectrum>(query_idx_low, cos_theta, gamma, active & valid_idx),
-                render_sky<Spectrum>(query_idx_high, cos_theta, gamma, active & valid_idx),
-                lerp_factor);
-
-            // Linearly interpolate the sun's irradiance across the spectrum
-            Spectrum sun_rad_low  = render_sun<Spectrum>(query_idx_low, cos_theta, gamma, hit_sun & valid_idx),
-                     sun_rad_high = render_sun<Spectrum>(query_idx_high, cos_theta, gamma, hit_sun & valid_idx),
-                     sun_rad = dr::lerp(sun_rad_low, sun_rad_high, lerp_factor);
-
-            Spectrum sun_ld = compute_sun_ld<Spectrum>(query_idx_low, query_idx_high, lerp_factor, gamma, hit_sun & valid_idx);
-
-            res += m_sun_scale * sun_rad * sun_ld * get_area_ratio(m_sun_half_aperture);
-
-        }
-
-        return res & active;
-    }
-
-
-    std::pair<DirectionSample3f, Spectrum> sample_direction(const Interaction3f &it,
-                                                            const Point2f &sample,
-                                                            Mask active) const override {
-        MI_MASKED_FUNCTION(ProfilerPhase::EndpointSampleDirection, active);
-
-        const Mask pick_sky = sample.x() < m_sky_sampling_w;
-
-        // Sample the sun or the sky
-        Vector3f sample_dir = dr::select(
-                pick_sky,
-                sample_sky({sample.x() / m_sky_sampling_w, sample.y()}, active),
-                sample_sun({(sample.x() - m_sky_sampling_w) / (1 - m_sky_sampling_w), sample.y()})
-        );
-
-        active &= Frame3f::cos_theta(sample_dir) >= 0.f;
-
-        // Automatically enlarge the bounding sphere when it does not contain the reference point
-        Float radius = dr::maximum(m_bsphere.radius, dr::norm(it.p - m_bsphere.center)),
-              dist   = 2.f * radius;
-
-        Vector3f d = m_to_world.value().transform_affine(sample_dir);
-        DirectionSample3f ds = dr::zeros<DirectionSample3f>();
-        ds.p       = dr::fmadd(d, dist, it.p);
-        ds.n       = -d;
-        ds.uv      = sample;
-        ds.time    = it.time;
-        ds.delta   = false;
-        ds.emitter = this;
-        ds.d       = d;
-        ds.dist    = dist;
-
-        SurfaceInteraction3f si = dr::zeros<SurfaceInteraction3f>();
-        si.wi = -d;
-        si.wavelengths = it.wavelengths;
-
-        auto [sky_pdf, sun_pdf] = compute_pdfs(sample_dir, !pick_sky, active);
-
-        ds.pdf = dr::lerp(sun_pdf, sky_pdf, m_sky_sampling_w);
-
-        Spectrum res = eval(si, active) / ds.pdf;
-                 res = dr::select(dr::isfinite(res), res, 0.f);
-        return { ds, res };
-    }
-
-    Float pdf_direction(const Interaction3f &, const DirectionSample3f &ds, Mask active) const override {
-        MI_MASKED_FUNCTION(ProfilerPhase::EndpointEvaluate, active);
-
-        Vector3f local_dir = m_to_world.value().inverse().transform_affine(ds.d);
-        const auto [sky_pdf, sun_pdf] = compute_pdfs(local_dir, true, active);
-
-        Float combined_pdf = dr::lerp(sun_pdf, sky_pdf, m_sky_sampling_w);
-        return dr::select(active, combined_pdf, 0.f);
     }
 
     void traverse(TraversalCallback *callback) override {
@@ -400,6 +295,189 @@ public:
         dr::make_opaque(m_bsphere.center, m_bsphere.radius);
     }
 
+    Spectrum eval(const SurfaceInteraction3f &si, Mask active) const override {
+        MI_MASKED_FUNCTION(ProfilerPhase::EndpointEvaluate, active);
+
+        using SpecMask   = dr::mask_t<Spectrum>;
+        using SpecUInt32 = dr::uint32_array_t<Spectrum>;
+
+        Vector3f local_wo = m_to_world.value().inverse().transform_affine(-si.wi);
+        Float cos_theta = Frame3f::cos_theta(local_wo),
+              gamma = dr::unit_angle(Vector3f(m_local_sun_frame.n), local_wo);
+
+        active &= cos_theta >= 0;
+        Mask hit_sun = active & (dr::dot(m_local_sun_frame.n, local_wo) >= dr::cos(m_sun_half_aperture));
+
+        UnpolarizedSpectrum res = 0.f;
+        if constexpr (is_rgb_v<Spectrum>) {
+            const SpecUInt32 idx = SpecUInt32({0, 1, 2});
+
+            res = m_sky_scale * render_sky<Spectrum>(idx, cos_theta, gamma, active);
+            res += m_sun_scale * render_sun<Spectrum>(idx, cos_theta, gamma, hit_sun) * get_area_ratio(m_sun_half_aperture) * SPEC_TO_RGB_SUN_CONV;
+
+            res *= MI_CIE_Y_NORMALIZATION;
+
+        } else {
+            const Spectrum normalized_wavelengths = (si.wavelengths - WAVELENGTHS<ScalarFloat>[0]) / WAVELENGTH_STEP;
+            const SpecMask valid_idx = (0.f <= normalized_wavelengths) & (normalized_wavelengths <= NB_CHANNELS - 1);
+
+            const SpecUInt32 query_idx_low  = dr::floor2int<SpecUInt32>(normalized_wavelengths),
+                             query_idx_high = query_idx_low + 1;
+
+            const Spectrum lerp_factor = normalized_wavelengths - query_idx_low;
+
+            // Linearly interpolate the sky's irradiance across the spectrum
+            res = m_sky_scale * dr::lerp(
+                render_sky<Spectrum>(query_idx_low, cos_theta, gamma, active & valid_idx),
+                render_sky<Spectrum>(query_idx_high, cos_theta, gamma, active & valid_idx),
+                lerp_factor);
+
+            // Linearly interpolate the sun's irradiance across the spectrum
+            Spectrum sun_rad_low  = render_sun<Spectrum>(query_idx_low, cos_theta, gamma, hit_sun & valid_idx),
+                     sun_rad_high = render_sun<Spectrum>(query_idx_high, cos_theta, gamma, hit_sun & valid_idx),
+                     sun_rad = dr::lerp(sun_rad_low, sun_rad_high, lerp_factor);
+
+            Spectrum sun_ld = compute_sun_ld<Spectrum>(query_idx_low, query_idx_high, lerp_factor, gamma, hit_sun & valid_idx);
+
+            res += m_sun_scale * sun_rad * sun_ld * get_area_ratio(m_sun_half_aperture);
+
+        }
+
+        return res & active;
+    }
+
+    std::pair<Ray3f, Spectrum> sample_ray(Float time, Float wavelength_sample,
+                                      const Point2f &sample2,
+                                      const Point2f &sample3,
+                                      Mask active) const override {
+        MI_MASKED_FUNCTION(ProfilerPhase::EndpointSampleRay, active);
+
+
+        const Mask pick_sky = sample2.x() < m_sky_sampling_w;
+
+        // 1. Sample spatial component
+        Vector3f v0 = dr::select(
+                pick_sky,
+                sample_sky({sample2.x() / m_sky_sampling_w, sample2.y()}, active),
+                sample_sun({(sample2.x() - m_sky_sampling_w) / (1 - m_sky_sampling_w), sample2.y()})
+        );
+        active &= Frame3f::cos_theta(v0) >= 0.f;
+
+        Point3f orig = dr::fmadd(v0, m_bsphere.radius, m_bsphere.center);
+                orig = m_to_world.value().transform_affine(orig);
+
+        // 2. Sample diral component
+        Vector3f v1 = warp::square_to_cosine_hemisphere(sample3),
+                 dir = Frame3f(-v0).to_world(v1);
+
+        // 3. Sample spectrum
+        auto [wavelengths, weight] = sample_wavelengths(
+            dr::zeros<SurfaceInteraction3f>(), wavelength_sample, active);
+
+        // 4. PDF
+        const auto [sky_pdf, sun_pdf] = compute_pdfs(v0, pick_sky, active);
+        Float pdf = dr::lerp(sun_pdf, sky_pdf, m_sky_sampling_w);
+
+        // TODO correctly compute the weights with the PDF
+
+        // 5. Emitted radiance
+        SurfaceInteraction3f si = dr::zeros<SurfaceInteraction3f>();
+        si.wavelengths = wavelengths;
+        si.wi = -dir;
+
+        return { Ray3f(orig, dir, time, wavelengths), weight };
+    }
+
+    std::pair<DirectionSample3f, Spectrum> sample_direction(const Interaction3f &it,
+                                                            const Point2f &sample,
+                                                            Mask active) const override {
+        MI_MASKED_FUNCTION(ProfilerPhase::EndpointSampleDirection, active);
+
+        const Mask pick_sky = sample.x() < m_sky_sampling_w;
+
+        // Sample the sun or the sky
+        Vector3f sample_dir = dr::select(
+                pick_sky,
+                sample_sky({sample.x() / m_sky_sampling_w, sample.y()}, active),
+                sample_sun({(sample.x() - m_sky_sampling_w) / (1 - m_sky_sampling_w), sample.y()})
+        );
+
+        active &= Frame3f::cos_theta(sample_dir) >= 0.f;
+
+        // Automatically enlarge the bounding sphere when it does not contain the reference point
+        Float radius = dr::maximum(m_bsphere.radius, dr::norm(it.p - m_bsphere.center)),
+              dist   = 2.f * radius;
+
+        Vector3f d = m_to_world.value().transform_affine(sample_dir);
+        DirectionSample3f ds = dr::zeros<DirectionSample3f>();
+        ds.p       = dr::fmadd(d, dist, it.p);
+        ds.n       = -d;
+        ds.uv      = sample;
+        ds.time    = it.time;
+        ds.delta   = false;
+        ds.emitter = this;
+        ds.d       = d;
+        ds.dist    = dist;
+
+        SurfaceInteraction3f si = dr::zeros<SurfaceInteraction3f>();
+        si.wi = -d;
+        si.wavelengths = it.wavelengths;
+
+        auto [sky_pdf, sun_pdf] = compute_pdfs(sample_dir, pick_sky, active);
+
+        ds.pdf = dr::lerp(sun_pdf, sky_pdf, m_sky_sampling_w);
+
+        Spectrum res = eval(si, active) / ds.pdf;
+                 res = dr::select(dr::isfinite(res), res, 0.f);
+        return { ds, res };
+    }
+
+    Float pdf_direction(const Interaction3f &, const DirectionSample3f &ds, Mask active) const override {
+        MI_MASKED_FUNCTION(ProfilerPhase::EndpointEvaluate, active);
+
+        Vector3f local_dir = m_to_world.value().inverse().transform_affine(ds.d);
+        const auto [sky_pdf, sun_pdf] = compute_pdfs(local_dir, true, active);
+
+        Float combined_pdf = dr::lerp(sun_pdf, sky_pdf, m_sky_sampling_w);
+        return dr::select(active, combined_pdf, 0.f);
+    }
+
+    Spectrum eval_direction(const Interaction3f& it, const DirectionSample3f& ds, Mask active) const override {
+        MI_MASKED_FUNCTION(ProfilerPhase::EndpointEvaluate, active);
+
+        SurfaceInteraction3f si = dr::zeros<SurfaceInteraction3f>();
+        si.wavelengths = it.wavelengths;
+        si.wi = -ds.d;
+
+        return eval(si, active);
+    }
+
+    std::pair<Wavelength, Spectrum>
+    sample_wavelengths(const SurfaceInteraction3f &si, Float sample,
+                   Mask active) const override {
+        auto [wavelengths, weight] = m_d65->sample_spectrum(
+            si, math::sample_shifted<Wavelength>(sample), active);
+
+        SurfaceInteraction3f si_query = si;
+        si_query.wavelengths = wavelengths;
+
+        return { wavelengths, weight * eval(si, active) };
+    }
+
+
+    std::pair<PositionSample3f, Float>
+    sample_position(Float /*time*/, const Point2f & /*sample*/,
+                    Mask /*active*/) const override {
+        if constexpr (dr::is_jit_v<Float>) {
+            /* Do not throw an exception in JIT-compiled variants. This
+               function might be invoked by DrJit's virtual function call
+               recording mechanism despite not influencing any actual
+               calculation. */
+            return { dr::zeros<PositionSample3f>(), dr::NaN<Float> };
+        } else {
+            NotImplementedError("sample_position");
+        }
+    }
 
     /// This emitter does not occupy any particular region of space, return an invalid bounding box
     ScalarBoundingBox3f bbox() const override {
@@ -861,6 +939,7 @@ private:
     ScalarFloat m_sky_scale;
     ScalarFloat m_sun_scale;
     ref<Texture> m_albedo;
+    ref<Texture> m_d65;
 
     // ========= Sun parameters =========
 
