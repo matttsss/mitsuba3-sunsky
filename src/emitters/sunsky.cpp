@@ -152,9 +152,6 @@ Resources
 
 */
 
-#define DATABASE_PATH "resources/sunsky/datasets/"
-#define DATABASE_TYPE std::string(is_spectral_v<Spectrum> ? "_spec_" : "_rgb_")
-
 template <typename Float, typename Spectrum>
 class SunskyEmitter final : public Emitter<Float, Spectrum> {
 public:
@@ -168,6 +165,8 @@ public:
     SunskyEmitter(const Properties &props) : Base(props) {
         if constexpr (!(is_rgb_v<Spectrum> || is_spectral_v<Spectrum>))
             Throw("Unsupported spectrum type, can only render in Spectral or RGB modes!");
+
+        constexpr bool IsRGB = is_rgb_v<Spectrum>;
 
         init_from_props(props);
 
@@ -183,24 +182,24 @@ public:
         const Float sun_eta = 0.5f * dr::Pi<Float> - m_sun_angles.y();
 
         // ================= GET SKY RADIANCE =================
-        m_sky_params_dataset = array_from_file<Float64, Float>(DATABASE_PATH "sky" + DATABASE_TYPE + "params.bin");
-        m_sky_rad_dataset = array_from_file<Float64, Float>(DATABASE_PATH "sky" + DATABASE_TYPE + "rad.bin");
+        m_sky_params_dataset = array_from_file<Float64, Float>(path_to_dataset<IsRGB>(Dataset::Sky_Params));
+        m_sky_rad_dataset = array_from_file<Float64, Float>(path_to_dataset<IsRGB>(Dataset::Sky_Radiance));
 
         m_sky_params = compute_radiance_params<SKY_DATASET_SIZE>(m_sky_params_dataset, albedo, m_turbidity, sun_eta),
         m_sky_radiance = compute_radiance_params<SKY_DATASET_RAD_SIZE>(m_sky_rad_dataset, albedo, m_turbidity, sun_eta);
 
         // ================= GET SUN RADIANCE =================
-        m_sun_rad_dataset = array_from_file<Float64, Float>(DATABASE_PATH "sun" + DATABASE_TYPE + "rad.bin");
+        m_sun_rad_dataset = array_from_file<Float64, Float>(path_to_dataset<IsRGB>(Dataset::Sun_Radiance));
 
         m_sun_radiance = compute_sun_params<SUN_DATASET_SIZE>(m_sun_rad_dataset, m_turbidity);
 
         // Only used in spectral mode since limb darkening is baked in the RGB dataset
         if constexpr (is_spectral_v<Spectrum>)
-            m_sun_ld = array_from_file<Float64, Float>(DATABASE_PATH "sun_spec_ld.bin");
+            m_sun_ld = array_from_file<Float64, Float>(path_to_dataset<IsRGB>(Dataset::Sun_Limb_Darkening));
 
 
         // ================= GET TGMM TABLES =================
-        m_tgmm_tables = array_from_file<Float32, Float>(DATABASE_PATH "tgmm_tables.bin");
+        m_tgmm_tables = array_from_file<Float32, Float>(path_to_dataset<IsRGB>(Dataset::TGMM_Tables));
 
         const auto [distrib_params, mis_weights] = compute_tgmm_distribution<TGMM_DATA_SIZE>(m_tgmm_tables, m_turbidity, sun_eta);
 

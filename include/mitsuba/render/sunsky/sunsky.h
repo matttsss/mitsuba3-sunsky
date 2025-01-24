@@ -57,10 +57,17 @@ NAMESPACE_BEGIN(mitsuba)
     #define ASTRONOMICAL_UNIT 149597890 // In km
 
     // Fixme: find the reason for this constant
-
     /// Conversion constant to convert spectral solar luminosity to RGB
     #define SPEC_TO_RGB_SUN_CONV 467.069280386
 
+
+    #define DATABASE_PATH "resources/sunsky/datasets/"
+
+    enum class Dataset {
+        Sky_Params, Sky_Radiance,
+        Sun_Radiance, Sun_Limb_Darkening,
+        TGMM_Tables
+    };
 
     // ================================================================================================
     // ====================================== HELPER FUNCTIONS ========================================
@@ -108,6 +115,32 @@ NAMESPACE_BEGIN(mitsuba)
     template <typename Value>
     MI_INLINE Value gaussian_cdf(const Value& mu, const Value& sigma, const Value& x) {
         return 0.5f * (1 + dr::erf(dr::InvSqrtTwo<Value> * (x - mu) / sigma));
+    }
+
+    /**
+     * \brief Extracts the relative path to the given dataset
+     *
+     * @tparam IsRGB Indicates if the dataset is RGB or spectral
+     * @param dataset Dataset to retrieve the path for
+     * @return The path to the dataset
+     */
+    template<bool IsRGB>
+    std::string path_to_dataset(const Dataset dataset) {
+        const std::string type_str = IsRGB ? "_rgb_" : "_spec_";
+        switch (dataset) {
+            case Dataset::Sky_Params:
+                return DATABASE_PATH "sky" + type_str + "params.bin";
+            case Dataset::Sky_Radiance:
+                return DATABASE_PATH "sky" + type_str + "rad.bin";
+            case Dataset::Sun_Radiance:
+                return DATABASE_PATH "sun" + type_str + "rad.bin";
+            case Dataset::Sun_Limb_Darkening:
+                return DATABASE_PATH "sun_spec_ld.bin";
+            case Dataset::TGMM_Tables:
+                return DATABASE_PATH "tgmm_tables.bin";
+            default:
+                return "Unknown dataset";
+        }
     }
 
     // ================================================================================================
@@ -597,56 +630,56 @@ NAMESPACE_BEGIN(mitsuba)
     constexpr size_t l_tri_shape[L_DIM] = {3, NB_ALBEDO, NB_TURBIDITY, NB_SKY_CTRL_PTS};
 
     /// Helper struct to link the dataset metadata
-    struct Dataset {
+    struct DatasetMetadata {
         size_t nb_dims;
         const size_t* dim_size;
 
         double** dataset;
     };
 
-    constexpr Dataset f_spectral = {
+    constexpr DatasetMetadata f_spectral = {
         .nb_dims = F_DIM,
         .dim_size = f_spec_shape,
         .dataset = datasets
     };
 
-    constexpr Dataset l_spectral = {
+    constexpr DatasetMetadata l_spectral = {
         .nb_dims = L_DIM,
         .dim_size = l_spec_shape,
         .dataset = datasetsRad
     };
 
-    constexpr Dataset f_RGB = {
+    constexpr DatasetMetadata f_RGB = {
         .nb_dims = F_DIM,
         .dim_size = f_tri_shape,
         .dataset = datasetsRGB
     };
 
-    constexpr Dataset l_RGB = {
+    constexpr DatasetMetadata l_RGB = {
         .nb_dims = L_DIM,
         .dim_size = l_tri_shape,
         .dataset = datasetsRGBRad
     };
 
-    constexpr Dataset f_XYZ = {
+    constexpr DatasetMetadata f_XYZ = {
         .nb_dims = F_DIM,
         .dim_size = f_tri_shape,
         .dataset = datasetsXYZ
     };
 
-    constexpr Dataset l_XYZ = {
+    constexpr DatasetMetadata l_XYZ = {
         .nb_dims = L_DIM,
         .dim_size = l_tri_shape,
         .dataset = datasetsXYZRad
     };
 
-    constexpr Dataset solar_dataset = {
+    constexpr DatasetMetadata solar_dataset = {
         .nb_dims = 4,
         .dim_size = solar_shape,
         .dataset = solarDatasets
     };
 
-    constexpr Dataset limb_darkening_dataset = {
+    constexpr DatasetMetadata limb_darkening_dataset = {
         .nb_dims = 2,
         .dim_size = limb_darkening_shape,
         .dataset = limbDarkeningDatasets
@@ -789,8 +822,9 @@ NAMESPACE_BEGIN(mitsuba)
      * to   [turbidity x albedo x sky_ctrl_pts x wavelengths/channels (x sky_params)]
      *
      * @param path Path of the file to write to
+     * @param dataset Dataset metadata to write
      */
-    void write_sky_data(const std::string &path, const Dataset& dataset) {
+    void write_sky_data(const std::string &path, const DatasetMetadata& dataset) {
         const auto [nb_dims, dim_size, p_dataset] = dataset;
         FileStream file(path, FileStream::EMode::ETruncReadWrite);
 
