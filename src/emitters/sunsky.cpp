@@ -103,13 +103,13 @@ Sun and Sky emitter (:monosp:`sunsky`)
    - |exposed|
 
 This plugin implements an environment emitter for the sun and sky dome.
-It uses the Hosek-Wilkie sun and sky model to generate strong approximations of the sky-dome without
+It uses the Hosek-Wilkie sun [1] and sky model [2] to generate strong approximations of the sky-dome without
 the cost of path tracing the atmosphere. For that it uses datasets stored in "resources/data/sunsky/datasets/"
 that are pre-processed on plugin instantiation/parameter-traversal.
 
 Internally, this emitter does not compute a bitmap of the sky-dome like an environment map, but evaluates the irradiance
 when it is needed. Consequently, without a bitmap to sample, sampling is done through a Truncated Gaussian Mixture Model
-pre-fitted to the given parameters.
+pre-fitted to the given parameters [3].
 
 Users should be aware that given certain parameters, the sun's radiance is ill-represented by the linear sRGB color space.
 Whether Mitsuba is rendering in spectral or RGB mode, if the final output is an sRGB image, it can happen that it contains
@@ -120,6 +120,19 @@ Note that attaching a sunsky emitter to the scene introduces physical units into
 which is ordinarily a unitless system. Specifically, the evaluated irradiance has units of power (:math:`W`) per
 unit area (:math:`m^{-2}`) per steradian (:math:`sr^{-1}`) per unit wavelength (:math:`nm^{-1}`). As a consequence,
 your scene should be modeled in meters for this plugin to work properly.
+
+ - [1] Lukáš Hošek and Alexander Wilkie. 2013. Adding a Solar-Radiance Function to
+   the Hošek-Wilkie Skylight Model. IEEE Computer Graphics and Applications 33, 3
+   (2013), 44–52. https://doi.org/10.1109/MCG.2013.18
+
+ - [2] Lukas Hosek and Alexander Wilkie. 2012. An analytic model for full spectral
+   sky-dome radiance. ACM Trans. Graph. 31, 4, Article 95 (July 2012), 9 pages.
+   https://doi.org/10.1145/2185520.2185591
+
+ - [3] Nick Vitsas, Konstantinos Vardis, and Georgios Papaioannou. 2021. Sampling
+   Clear Sky Models using Truncated Gaussian Mixtures. In Eurographics Symposium
+   on Rendering - DL-only Track, Adrien Bousseau and Morgan McGuire (Eds.). The
+   Eurographics Association. https://doi.org/10.2312/sr.20211288
 
 .. tabs::
     .. code-tab:: xml
@@ -133,22 +146,6 @@ your scene should be modeled in meters for this plugin to work properly.
 
         'type': 'sunsky',
         'hour': 20.0
-
-Resources
-*********
-
- - Lukas Hosek and Alexander Wilkie. 2012. An analytic model for full spectral
-   sky-dome radiance. ACM Trans. Graph. 31, 4, Article 95 (July 2012), 9 pages.
-   https://doi.org/10.1145/2185520.2185591
-
- - Lukáš Hošek and Alexander Wilkie. 2013. Adding a Solar-Radiance Function to
-   the Hošek-Wilkie Skylight Model. IEEE Computer Graphics and Applications 33, 3
-   (2013), 44–52. https://doi.org/10.1109/MCG.2013.18
-
- - Nick Vitsas, Konstantinos Vardis, and Georgios Papaioannou. 2021. Sampling
-   Clear Sky Models using Truncated Gaussian Mixtures. In Eurographics Symposium
-   on Rendering - DL-only Track, Adrien Bousseau and Morgan McGuire (Eds.). The
-   Eurographics Association. https://doi.org/10.2312/sr.20211288
 
 */
 
