@@ -167,10 +167,7 @@ public:
 
     SunskyEmitter(const Properties &props) : Base(props) {
         if constexpr (!(is_rgb_v<Spectrum> || is_spectral_v<Spectrum>))
-            Throw("Unsupported spectrum type!");
-
-        if constexpr (is_spectral_v<Spectrum>)
-            c_wavelengths = {320, 360, 400, 440, 480, 520, 560, 600, 640, 680, 720};
+            Throw("Unsupported spectrum type, can only render in Spectral or RGB modes!");
 
         init_from_props(props);
 
@@ -186,10 +183,10 @@ public:
         const Float sun_eta = 0.5f * dr::Pi<Float> - m_sun_angles.y();
 
         // ================= GET SKY RADIANCE =================
-        m_sky_dataset = array_from_file<Float64, Float>(DATABASE_PATH "sky" + DATABASE_TYPE + "params.bin");
+        m_sky_params_dataset = array_from_file<Float64, Float>(DATABASE_PATH "sky" + DATABASE_TYPE + "params.bin");
         m_sky_rad_dataset = array_from_file<Float64, Float>(DATABASE_PATH "sky" + DATABASE_TYPE + "rad.bin");
 
-        m_sky_params = compute_radiance_params<SKY_DATASET_SIZE>(m_sky_dataset, albedo, m_turbidity, sun_eta),
+        m_sky_params = compute_radiance_params<SKY_DATASET_SIZE>(m_sky_params_dataset, albedo, m_turbidity, sun_eta),
         m_sky_radiance = compute_radiance_params<SKY_DATASET_RAD_SIZE>(m_sky_rad_dataset, albedo, m_turbidity, sun_eta);
 
         // ================= GET SUN RADIANCE =================
@@ -212,8 +209,6 @@ public:
 
         m_sky_sampling_w = estimate_sky_sun_ratio();
 
-        std::cout << "Sky sampling weight: " << m_sky_sampling_w << std::endl;
-
         // ================= GENERAL PARAMETERS =================
 
         /* Until `set_scene` is called, we have no information
@@ -226,8 +221,8 @@ public:
     Spectrum eval(const SurfaceInteraction3f &si, Mask active) const override {
         MI_MASKED_FUNCTION(ProfilerPhase::EndpointEvaluate, active);
 
-        using SpecUInt32 = dr::uint32_array_t<Spectrum>;
         using SpecMask   = dr::mask_t<Spectrum>;
+        using SpecUInt32 = dr::uint32_array_t<Spectrum>;
 
         Vector3f local_wo = m_to_world.value().inverse().transform_affine(-si.wi);
         Float cos_theta = Frame3f::cos_theta(local_wo),
@@ -238,7 +233,6 @@ public:
 
         UnpolarizedSpectrum res = 0.f;
         if constexpr (is_rgb_v<Spectrum>) {
-            // dr::width(idx) == 1
             const SpecUInt32 idx = SpecUInt32({0, 1, 2});
 
             res = m_sky_scale * render_sky<Spectrum>(idx, cos_theta, gamma, active);
@@ -255,11 +249,13 @@ public:
 
             const Spectrum lerp_factor = normalized_wavelengths - query_idx_low;
 
+            // Linearly interpolate the sky's irradiance across the spectrum
             res = m_sky_scale * dr::lerp(
                 render_sky<Spectrum>(query_idx_low, cos_theta, gamma, active & valid_idx),
                 render_sky<Spectrum>(query_idx_high, cos_theta, gamma, active & valid_idx),
                 lerp_factor);
 
+            // Linearly interpolate the sun's irradiance across the spectrum
             Spectrum sun_rad_low  = render_sun<Spectrum>(query_idx_low, cos_theta, gamma, hit_sun & valid_idx),
                      sun_rad_high = render_sun<Spectrum>(query_idx_high, cos_theta, gamma, hit_sun & valid_idx),
                      sun_rad = dr::lerp(sun_rad_low, sun_rad_high, lerp_factor);
@@ -288,7 +284,6 @@ public:
                 sample_sun({(sample.x() - m_sky_sampling_w) / (1 - m_sky_sampling_w), sample.y()})
         );
 
-        //sample_dir = m_local_sun_frame.n;
         active &= Frame3f::cos_theta(sample_dir) >= 0.f;
 
         // Automatically enlarge the bounding sphere when it does not contain the reference point
@@ -379,7 +374,7 @@ public:
         Float eta = 0.5f * dr::Pi<Float> - m_sun_angles.y();
 
         // Update sky
-        m_sky_params = compute_radiance_params<SKY_DATASET_SIZE>(m_sky_dataset, albedo, m_turbidity, eta);
+        m_sky_params = compute_radiance_params<SKY_DATASET_SIZE>(m_sky_params_dataset, albedo, m_turbidity, eta);
         m_sky_radiance = compute_radiance_params<SKY_DATASET_RAD_SIZE>(m_sky_rad_dataset, albedo, m_turbidity, eta);
 
         // Update sun
@@ -511,8 +506,8 @@ private:
                 solar_radiance += dr::pow(x, k) * dr::gather<Spec>(m_sun_radiance, global_idx + k, active);
 
         } else {
-            // Reproduces the spectral equation above but distributes the product of sums
-            // since it uses interpolated coefficients from the spectral dataset
+            // Reproduces the spectral computation for RGB, however, in this case,
+            // limb darkening is baked into the dataset, hence the two for-loops
 
             const Float cos_psi = compute_cos_psi<Float>(gamma, m_sun_half_aperture);
             SpecUInt32 global_idx = pos * (3 * NB_SUN_CTRL_PTS * NB_SUN_LD_PARAMS) +
@@ -527,7 +522,6 @@ private:
         }
 
         return solar_radiance & active;
-
     }
 
     /**
@@ -567,7 +561,7 @@ private:
     }
 
     /**
-     * Samples the sky from the truncated gaussian mixture with the given sample
+     * \brief Samples the sky from the truncated gaussian mixture with the given sample
      * Based on the Truncated Gaussian Mixture Model (TGMM) for sky dome by N. Vitsas and K. Vardis
      * https://diglib.eg.org/items/b3f1efca-1d13-44d0-ad60-741c4abe3d21
      *
@@ -602,12 +596,12 @@ private:
         // Clamp theta to avoid negative z-axis values (FP errors)
         angles.y() = dr::minimum(angles.y(), 0.5f * dr::Pi<Float> - dr::Epsilon<Float>);
 
-        return m_to_world.value().transform_affine(to_spherical(angles));
+        return to_spherical(angles);
     }
 
     Vector3f sample_sun(const Point2f& sample) const {
         return m_local_sun_frame.to_world(
-            warp::square_to_uniform_cone(sample, (Float) dr::cos(m_sun_half_aperture))
+            warp::square_to_uniform_cone<Float>(sample, dr::cos(m_sun_half_aperture))
         );
     }
 
@@ -697,18 +691,18 @@ private:
      * @return The sky's ratio of luminance, in [0, 1]
      */
     Float estimate_sky_sun_ratio() const {
-        FullSpectrum sky_radiance = dr::zeros<FullSpectrum>(),
-                     sun_radiance = dr::zeros<FullSpectrum>();
-
-        dr::uint32_array_t<FullSpectrum> channel_idx;
-        if constexpr (is_rgb_v<Spectrum>)
-            channel_idx = {0, 1, 2};
-        else
-            channel_idx = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
-
         if constexpr (!dr::is_array_v<Float>)
-            return 0.5f;
+            return 0.5f; // Mean ratio over the range of parameters (turbidity, sun angle)
         else {
+
+            FullSpectrum sky_radiance = dr::zeros<FullSpectrum>(),
+                         sun_radiance = dr::zeros<FullSpectrum>();
+
+            dr::uint32_array_t<FullSpectrum> channel_idx;
+            if constexpr (is_rgb_v<Spectrum>)
+                channel_idx = {0, 1, 2};
+            else
+                channel_idx = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
 
             // Quadrature points and weights
             const auto [x, w_x] = quad::gauss_legendre<Float>(200);
@@ -717,7 +711,7 @@ private:
             {
 
                 // Mapping for [-1, 1] x [-1, 1] -> [0, 2pi] x [0, 1]
-                const Float inv_J = 0.5f * dr::Pi<Float>;
+                const Float J = 0.5f * dr::Pi<Float>;
                 Float phi = dr::Pi<Float> * (x + 1),
                       cos_theta = 0.5f * (x + 1);
 
@@ -731,7 +725,7 @@ private:
                 Float gamma = dr::unit_angle(Vector3f(m_local_sun_frame.n), sky_wo);
 
                 FullSpectrum ray_radiance = render_sky<FullSpectrum>(channel_idx, cos_theta, gamma, true) * w_phi * w_cos_theta;
-                sky_radiance = dr::sum_inner(ray_radiance) * inv_J;
+                sky_radiance = dr::sum_inner(ray_radiance) * J;
             }
 
             // Compute sun radiance over hemisphere
@@ -739,7 +733,7 @@ private:
                 const ScalarFloat cosine_cutoff = dr::cos(m_sun_half_aperture);
 
                 // Mapping for [-1, 1] x [-1, 1] -> [0, 2pi] x [cos(alpha/2), 1]
-                const Float inv_J = 0.5f * dr::Pi<ScalarFloat> * (1 - cosine_cutoff);
+                const Float J = 0.5f * dr::Pi<ScalarFloat> * (1 - cosine_cutoff);
                 Float phi = dr::Pi<Float> * (x + 1),
                       cos_gamma = 0.5f * ((1 - cosine_cutoff) * x + (1 + cosine_cutoff));
 
@@ -765,7 +759,7 @@ private:
                 if constexpr (is_spectral_v<Spectrum>)
                     ray_radiance *= compute_sun_ld<FullSpectrum>(channel_idx, channel_idx, 0.f, gamma, active);
 
-                sun_radiance = dr::sum_inner(ray_radiance) * inv_J;
+                sun_radiance = dr::sum_inner(ray_radiance) * J;
             }
 
             // Extract luminance
@@ -774,8 +768,10 @@ private:
                 sky_lum *= luminance(sky_radiance);
                 sun_lum *= luminance(sun_radiance) * get_area_ratio(m_sun_half_aperture) * SPEC_TO_RGB_SUN_CONV;
             } else {
-                sky_lum *= luminance(sky_radiance, c_wavelengths);
-                sun_lum *= luminance(sun_radiance, c_wavelengths) * get_area_ratio(m_sun_half_aperture);
+                const FullSpectrum wavelengths = {320, 360, 400, 440, 480, 520, 560, 600, 640, 680, 720};
+
+                sky_lum *= luminance(sky_radiance, wavelengths);
+                sun_lum *= luminance(sun_radiance, wavelengths) * get_area_ratio(m_sun_half_aperture);
             }
 
             // Normalize quantities for valid distribution
@@ -804,16 +800,20 @@ private:
         if (m_sun_half_aperture <= 0.f || 0.5f * dr::Pi<Float> <= m_sun_half_aperture)
             Log(Error, "Invalid sun aperture angle: %f, must be in ]0, 90[ degrees!", dr::rad_to_deg(2 * m_sun_half_aperture));
 
-        m_albedo = props.texture<Texture>("albedo", 0.2f);
+        m_albedo = props.texture<Texture>("albedo", 0.3f);
         if (m_albedo->is_spatially_varying())
             Log(Error, "Expected a non-spatially varying radiance spectra!");
 
         if (props.has_property("sun_direction")) {
             if (props.has_property("latitude") || props.has_property("longitude")
-                || props.has_property("timezone") || props.has_property("day")
-                || props.has_property("time"))
-                Log(Error, "Both the 'sun_direction' parameter and time/location "
-                           "information were provided -- only one of them can be specified at a time!");
+                || props.has_property("timezone") || props.has_property("year")
+                || props.has_property("month") || props.has_property("day")
+                || props.has_property("hour") || props.has_property("minute")
+                || props.has_property("second")) {
+                Log(Error, "Both the 'sun_direction' and parameters for time/location "
+                           "were provided, both information cannot be given at the same time!");
+            }
+
             m_active_record = false;
             m_sun_dir = dr::normalize(props.get<ScalarVector3f>("sun_direction"));
             dr::make_opaque(m_sun_dir);
@@ -823,8 +823,8 @@ private:
             m_location.longitude = props.get<ScalarFloat>("longitude", 139.6917f);
             m_location.timezone  = props.get<ScalarFloat>("timezone", 9);
             m_time.year          = props.get<ScalarInt32>("year", 2010);
-            m_time.day           = props.get<ScalarUInt32>("day", 10);
             m_time.month         = props.get<ScalarUInt32>("month", 7);
+            m_time.day           = props.get<ScalarUInt32>("day", 10);
             m_time.hour          = props.get<ScalarFloat>("hour", 15.0f);
             m_time.minute        = props.get<ScalarFloat>("minute", 0.0f);
             m_time.second        = props.get<ScalarFloat>("second", 0.0f);
@@ -834,6 +834,9 @@ private:
                             m_time.year, m_time.day, m_time.month, m_time.hour, m_time.minute, m_time.second);
 
             m_sun_dir = compute_sun_coordinates(m_time, m_location);
+            if (dr::all(m_sun_dir.z() < 0))
+                Log(Warn, "The sun is below the horizon at the specified time and location!");
+
             m_sun_dir = m_to_world.value().transform_affine(m_sun_dir);
         }
 
@@ -844,7 +847,7 @@ private:
     // ================================================================================================
 
     /// Offset used to avoid division by zero in the pdf computation
-    static constexpr ScalarFloat SIN_OFFSET = dr::Epsilon<Float>; // chi2 passes with 0.00775
+    static constexpr ScalarFloat SIN_OFFSET = dr::Epsilon<Float>; // non-cropped chi2 passes with 0.00775
     /// Number of channels used in the skylight model
     static constexpr uint32_t NB_CHANNELS = is_spectral_v<Spectrum> ? NB_WAVELENGTHS : 3;
 
@@ -854,38 +857,40 @@ private:
                               SUN_DATASET_SIZE = NB_TURBIDITY * NB_CHANNELS * NB_SUN_SEGMENTS * NB_SUN_CTRL_PTS * (is_spectral_v<Spectrum> ? 1 : NB_SUN_LD_PARAMS),
                               TGMM_DATA_SIZE = (NB_TURBIDITY - 1) * NB_ETAS * NB_GAUSSIAN * NB_GAUSSIAN_PARAMS;
 
-    FullSpectrum c_wavelengths;
-
     BoundingSphere3f m_bsphere;
 
+    // ========= Common parameters =========
     Float m_turbidity;
     Float m_sky_sampling_w;
     ScalarFloat m_sky_scale;
     ScalarFloat m_sun_scale;
-
     ref<Texture> m_albedo;
 
-    // Sun parameters
+    // ========= Sun parameters =========
+
+    /// Sun direction in world coordinates
     Vector3f m_sun_dir;
+    /// Sun angles in local coordinates, (phi, theta)
     Point2f m_sun_angles;
     Frame3f m_local_sun_frame;
     ScalarFloat m_sun_half_aperture;
+    /// Indicates if the plugin was initialized with a location/time record
     bool m_active_record;
     LocationRecord<Float> m_location;
     DateTimeRecord<Float> m_time;
 
-    // Radiance parameters
+    // ========= Radiance parameters =========
     FloatStorage m_sky_params;
     FloatStorage m_sky_radiance;
     FloatStorage m_sun_radiance;
 
-    // Sampling parameters
+    // ========= Sampling parameters =========
     FloatStorage m_gaussians;
     DiscreteDistribution<Float> m_gaussian_distr;
 
     // Permanent datasets loaded from files/memory
-    FloatStorage m_sky_dataset;
     FloatStorage m_sky_rad_dataset;
+    FloatStorage m_sky_params_dataset;
     FloatStorage m_sun_ld; // Not initialized in RGB mode
     FloatStorage m_sun_rad_dataset;
     FloatStorage m_tgmm_tables;
