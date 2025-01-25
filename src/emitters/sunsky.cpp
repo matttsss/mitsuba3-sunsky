@@ -363,8 +363,8 @@ public:
         );
         active &= Frame3f::cos_theta(v0) >= 0.f;
 
-        Point3f orig = dr::fmadd(v0, m_bsphere.radius, m_bsphere.center);
-                orig = m_to_world.value().transform_affine(orig);
+        Point3f orig = m_to_world.value().transform_affine(v0);
+                orig = dr::fmadd(orig, m_bsphere.radius, m_bsphere.center);
 
         // 2. Sample diral component
         Vector3f v1 = warp::square_to_cosine_hemisphere(sample3),
@@ -377,14 +377,15 @@ public:
         // 4. PDF
         const auto [sky_pdf, sun_pdf] = compute_pdfs(v0, pick_sky, active);
         Float pdf = dr::lerp(sun_pdf, sky_pdf, m_sky_sampling_w);
-
-        // TODO correctly compute the weights with the PDF
+              pdf *= warp::square_to_cosine_hemisphere_pdf(v1);
 
         // 5. Emitted radiance
         SurfaceInteraction3f si = dr::zeros<SurfaceInteraction3f>();
         si.wavelengths = wavelengths;
         si.wi = -dir;
 
+        weight *= eval(si, active) / pdf;
+        weight &= dr::isfinite(weight);
         return { Ray3f(orig, dir, time, wavelengths), weight };
     }
 
@@ -428,7 +429,7 @@ public:
         ds.pdf = dr::lerp(sun_pdf, sky_pdf, m_sky_sampling_w);
 
         Spectrum res = eval(si, active) / ds.pdf;
-                 res = dr::select(dr::isfinite(res), res, 0.f);
+                 res &= dr::isfinite(res);
         return { ds, res };
     }
 
