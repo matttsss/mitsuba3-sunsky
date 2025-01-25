@@ -671,7 +671,7 @@ private:
         // Clamp theta to avoid negative z-axis values (FP errors)
         angles.y() = dr::minimum(angles.y(), 0.5f * dr::Pi<Float> - dr::Epsilon<Float>);
 
-        return to_spherical(angles);
+        return dr::sphdir(angles.y(), angles.x());
     }
 
     Vector3f sample_sun(const Point2f& sample) const {

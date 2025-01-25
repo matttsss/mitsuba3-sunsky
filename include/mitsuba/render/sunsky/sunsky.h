@@ -73,17 +73,13 @@ NAMESPACE_BEGIN(mitsuba)
     // ====================================== HELPER FUNCTIONS ========================================
     // ================================================================================================
 
-    template<typename Value>
-    Vector<Value, 3> to_spherical(const Point<Value, 2>& angles) {
-        auto [sp, cp] = dr::sincos(angles.x());
-        auto [st, ct] = dr::sincos(angles.y());
-
-        return {
-            cp * st, sp * st, ct
-        };
-    }
-
-    template<typename Value>
+    /**
+     * \brief Converts a spherical unit vector to it's angles
+     *
+     * @param v Vector to convert
+     * @return {phi, theta} angles
+     */
+    template <typename Value>
     Point<Value, 2> from_spherical(const Vector<Value, 3>& v) {
         return {
             dr::atan2(v.y(), v.x()),
@@ -374,7 +370,7 @@ NAMESPACE_BEGIN(mitsuba)
             elevation += (EARTH_MEAN_RADIUS / ASTRONOMICAL_UNIT) * dr::sin(elevation);
         }
 
-        return to_spherical<Float>({azimuth - dr::Pi<Float>, elevation});
+        return dr::sphdir(elevation, azimuth - dr::Pi<Float>);
     }
 
     /**
@@ -603,7 +599,7 @@ NAMESPACE_BEGIN(mitsuba)
      * from the original header files. These functions may not look friendly, but
      * they mainly reorder the data by swapping axis. They should only be used if
      * the generated dataset files are lost.
-     * The exception being the Solar RGB dataset that need to be computed via the
+     * The exception being the Solar RGB dataset that needs to be computed via the
      * Solar spectral dataset and the limb darkening dataset.
      */
 
