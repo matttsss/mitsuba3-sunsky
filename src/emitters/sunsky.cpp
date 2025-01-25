@@ -674,6 +674,12 @@ private:
         return dr::sphdir(angles.y(), angles.x());
     }
 
+    /**
+     * \brief Samples the sun from a uniform cone with the given sample
+     *
+     * @param sample Sample to generate the sun ray
+     * @return The sampled sun direction
+     */
     Vector3f sample_sun(const Point2f& sample) const {
         return m_local_sun_frame.to_world(
             warp::square_to_uniform_cone<Float>(sample, dr::cos(m_sun_half_aperture))
@@ -702,6 +708,13 @@ private:
         return {sky_pdf, sun_pdf};
     }
 
+    /**
+     * \brief Computes the PDF from the TGMM for the given angles
+     *
+     * @param angles Angles of the vector in local coordinates (phi, theta)
+     * @param active Mask for the active lanes and valid rays
+     * @return The PDF of the sky for the given angles with no sin(theta) factor
+     */
     Float tgmm_pdf(Point2f angles, Mask active) const {
         // From local frame to reference frame where sun_phi = pi/2 and phi is in [0, 2pi]
         angles.x() -= m_sun_angles.x() - 0.5f * dr::Pi<Float>;
@@ -733,30 +746,6 @@ private:
             pdf += m_gaussians[base_idx + 4] * gaussian_pdf / volume;
         }
         return dr::select(active, pdf, 0.f);
-    }
-
-    FloatStorage extract_albedo(const ref<Texture>& albedo_tex) const {
-        FloatStorage albedo = dr::zeros<FloatStorage>(NB_CHANNELS);
-        SurfaceInteraction3f si = dr::zeros<SurfaceInteraction3f>();
-
-        if constexpr (is_rgb_v<Spectrum>) {
-            albedo = dr::ravel(albedo_tex->eval(si));
-
-        } else if constexpr (dr::is_array_v<Float> && is_spectral_v<Spectrum>) {
-            si.wavelengths = dr::load<FloatStorage>(WAVELENGTHS<ScalarFloat>, NB_CHANNELS);
-            albedo = albedo_tex->eval(si)[0];
-
-        } else if (!dr::is_array_v<Float> && is_spectral_v<Spectrum>) {
-            for (ScalarUInt32 i = 0; i < NB_CHANNELS; ++i) {
-                si.wavelengths = WAVELENGTHS<ScalarFloat>[i];
-                dr::scatter(albedo, albedo_tex->eval(si)[0], (UInt32) i);
-            }
-        }
-
-        if (dr::any(albedo < 0.f || albedo > 1.f))
-            Log(Error, "Albedo values must be in [0, 1], got: %f", albedo);
-
-        return albedo;
     }
 
     /**
@@ -915,6 +904,36 @@ private:
             m_sun_dir = m_to_world.value().transform_affine(m_sun_dir);
         }
 
+    }
+
+    /**
+     * \brief Extract the albedo values for the required wavelengths/channels
+     *
+     * @param albedo_tex Texture to extract the albedo from
+     * @return The buffer with the extracted albedo values for the needed wavelengths/channels
+     */
+    FloatStorage extract_albedo(const ref<Texture>& albedo_tex) const {
+        FloatStorage albedo = dr::zeros<FloatStorage>(NB_CHANNELS);
+        SurfaceInteraction3f si = dr::zeros<SurfaceInteraction3f>();
+
+        if constexpr (is_rgb_v<Spectrum>) {
+            albedo = dr::ravel(albedo_tex->eval(si));
+
+        } else if constexpr (dr::is_array_v<Float> && is_spectral_v<Spectrum>) {
+            si.wavelengths = dr::load<FloatStorage>(WAVELENGTHS<ScalarFloat>, NB_CHANNELS);
+            albedo = albedo_tex->eval(si)[0];
+
+        } else if (!dr::is_array_v<Float> && is_spectral_v<Spectrum>) {
+            for (ScalarUInt32 i = 0; i < NB_CHANNELS; ++i) {
+                si.wavelengths = WAVELENGTHS<ScalarFloat>[i];
+                dr::scatter(albedo, albedo_tex->eval(si)[0], (UInt32) i);
+            }
+        }
+
+        if (dr::any(albedo < 0.f || albedo > 1.f))
+            Log(Error, "Albedo values must be in [0, 1], got: %f", albedo);
+
+        return albedo;
     }
 
     // ================================================================================================
