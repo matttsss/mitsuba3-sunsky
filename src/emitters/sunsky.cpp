@@ -211,7 +211,6 @@ public:
         about the scene and default to the unit bounding sphere. */
         m_bsphere = BoundingSphere3f(ScalarPoint3f(0.f), 1.f);
 
-        m_d65 = Texture::D65(1.f);
         m_flags = +EmitterFlags::Infinite | +EmitterFlags::SpatiallyVarying;
     }
 
@@ -961,7 +960,6 @@ private:
     ScalarFloat m_sky_scale;
     ScalarFloat m_sun_scale;
     ref<Texture> m_albedo;
-    ref<Texture> m_d65;
 
     // ========= Sun parameters =========
 
