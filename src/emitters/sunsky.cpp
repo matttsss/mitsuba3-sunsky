@@ -458,13 +458,13 @@ public:
     std::pair<Wavelength, Spectrum>
     sample_wavelengths(const SurfaceInteraction3f &si, Float sample,
                    Mask active) const override {
-        auto [wavelengths, weight] = m_d65->sample_spectrum(
-            si, math::sample_shifted<Wavelength>(sample), active);
-
+        // Uniformly sample the spectrum for the valid wavelengths
+        // Mitsuba 3 is defined over the range [360, 830] nm
+        // And the model is defined for the range [320, 720] nm
         SurfaceInteraction3f si_query = si;
-        si_query.wavelengths = wavelengths;
+        si_query.wavelengths = MI_CIE_MIN + (720 - MI_CIE_MIN) * math::sample_shifted<Wavelength>(sample);
 
-        return { wavelengths, weight * eval(si_query, active) };
+        return { si_query.wavelengths, eval(si_query, active) * (720 - MI_CIE_MIN) };
     }
 
 
