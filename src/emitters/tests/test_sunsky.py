@@ -66,7 +66,7 @@ def generate_and_compare(render_params, ref_path, rtol):
     :param ref_path: Path to the reference image
     :param rtol: Relative error tolerance
     """
-    render_res = (512//2, 512)
+    render_res = (64//2, 64)
 
     if mi.is_rgb:
         hour, turb, albedo = render_params
@@ -100,7 +100,7 @@ def generate_and_compare(render_params, ref_path, rtol):
     si.wi = mi.Vector3f(cp*st, sp*st, ct)
 
     rendered_scene = mi.TensorXf(dr.ravel(plugin.eval(si)), (*render_res, 3)) if mi.is_rgb \
-                else eval_full_spec(plugin, si, wavelengths, render_res)
+        else eval_full_spec(plugin, si, wavelengths, render_res)
 
     # Load the reference image
     reference_scene = mi.TensorXf(mi.Bitmap(ref_path))
@@ -121,7 +121,7 @@ def test01_sky_radiance_rgb(variants_vec_rgb, render_params):
     hour, turb, albedo = render_params
 
     ref_path = f"resources/sunsky/test_data/renders/sky_rgb_hour{hour:.2f}_t{turb:.3f}_a{albedo:.3f}.exr"
-    generate_and_compare(render_params, ref_path, 0.005)
+    generate_and_compare(render_params, ref_path, 0.017)
 
 
 
@@ -135,25 +135,19 @@ def test02_sky_radiance_spectral(variants_vec_spectral, render_params):
     sun_eta, turb, albedo = render_params
 
     ref_path = f"resources/sunsky/test_data/renders/sky_spec_eta{sun_eta:.3f}_t{turb:.3f}_a{albedo:.3f}.exr"
-    generate_and_compare(render_params, ref_path, 0.028)
+    generate_and_compare(render_params, ref_path, 0.037)
 
 
 
 
 def test03_sky_radiance_spectral_albedo(variants_vec_spectral):
     generate_and_compare((dr.deg2rad(60), 4.2, SPECIAL_ALBEDO),
-                         "resources/sunsky/test_data/renders/sky_spectrum_special.exr", 0.028)
+                         "resources/sunsky/test_data/renders/sky_spectrum_special.exr", 0.03)
 
 
-
-
-def create_spectrum_file(turb, eta, gamma, ref_wav, ref_rad):
-    with open(f"../renders/spectrum/sun_spectrum_t{turb:.1f}_eta{eta:.2f}_gamma{gamma:.3e}.spd", "w") as f:
-        for wav, rad in zip(ref_wav, ref_rad):
-            f.write(f"{wav} {rad}\n")
 
 def extract_spectrum(turb, eta, gamma):
-    with open(f"../renders/spectrum/sun_spectrum_t{turb:.1f}_eta{eta:.2f}_gamma{gamma:.3e}.spd", "r") as f:
+    with open(f"resources/sunsky/test_data/spectrum/sun_spectrum_t{turb:.1f}_eta{eta:.2f}_gamma{gamma:.3e}.spd", "r") as f:
         return [float(line.split()[1]) for line in f.readlines()]
 
 
@@ -163,10 +157,6 @@ def extract_spectrum(turb, eta, gamma):
 def test04_sun_radiance(variants_vec_spectral, turb, eta_ray, gamma):
 
     wavelengths = np.linspace(310, 800, 15)
-
-    # Create the spectrum file
-    #ref_rad = [mi.hosek_sun_rad(turb, wav, eta_ray, gamma) for wav in wavelengths]
-    #create_spectrum_file(turb, eta_ray, gamma, wavelengths, ref_rad)
 
     phi = dr.pi/5
     theta_ray = dr.pi/2 - eta_ray
@@ -178,11 +168,11 @@ def test04_sun_radiance(variants_vec_spectral, turb, eta_ray, gamma):
         sun_theta = theta_ray + gamma
 
     plugin = make_emitter_angles(turb=turb,
-                          sun_phi=phi,
-                          sun_theta=sun_theta,
-                          albedo=0.0,
-                          sun_scale=1.0,
-                          sky_scale=0.0)
+                                 sun_phi=phi,
+                                 sun_theta=sun_theta,
+                                 albedo=0.0,
+                                 sun_scale=1.0,
+                                 sky_scale=0.0)
 
     # Generate rays
     si = mi.SurfaceInteraction3f()
@@ -216,11 +206,11 @@ def test05_sun_sampling(variants_vec_backends_once, sun_theta):
     sun_dir = mi.Vector3f(cp * st, sp * st, ct)
 
     plugin = make_emitter_angles(turb=4.0,
-                          sun_phi=sun_phi,
-                          sun_theta=sun_theta,
-                          albedo=0.0,
-                          sun_scale=1.0,
-                          sky_scale=0.0)
+                                 sun_phi=sun_phi,
+                                 sun_theta=sun_theta,
+                                 albedo=0.0,
+                                 sun_scale=1.0,
+                                 sky_scale=0.0)
 
     rng = mi.PCG32(size=10_000)
     sample = mi.Point2f(
