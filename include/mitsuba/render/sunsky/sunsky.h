@@ -3,6 +3,7 @@
 #include <utility>
 #include <vector>
 
+#include <mitsuba/core/fresolver.h>
 #include <mitsuba/core/fstream.h>
 
 // Used for creating the RGB solar dataset
@@ -195,8 +196,6 @@ NAMESPACE_BEGIN(mitsuba)
         using UInt32Storage = DynamicBuffer<UInt32>;
         using FloatStorage = DynamicBuffer<Float>;
 
-        const dr::mask_t<Float> active = turbidity >= 1 && turbidity <= 10 &&
-                                         eta >= 0 && eta <= 0.5 * dr::Pi<Float>;
 
         Float x = dr::cbrt(2 * dr::InvPi<Float> * eta);
 
@@ -214,10 +213,10 @@ NAMESPACE_BEGIN(mitsuba)
 
         // Interpolate on elevation
         FloatStorage
-            t_low_a_low   = bezier_interpolate(dataset, result_size, t_low  * t_block_size + 0 * a_block_size, x, active),
-            t_high_a_low  = bezier_interpolate(dataset, result_size, t_high * t_block_size + 0 * a_block_size, x, active),
-            t_low_a_high  = bezier_interpolate(dataset, result_size, t_low  * t_block_size + 1 * a_block_size, x, active),
-            t_high_a_high = bezier_interpolate(dataset, result_size, t_high * t_block_size + 1 * a_block_size, x, active);
+            t_low_a_low   = bezier_interpolate(dataset, result_size, t_low  * t_block_size + 0 * a_block_size, x, t_low < NB_TURBIDITY),
+            t_high_a_low  = bezier_interpolate(dataset, result_size, t_high * t_block_size + 0 * a_block_size, x, t_high < NB_TURBIDITY),
+            t_low_a_high  = bezier_interpolate(dataset, result_size, t_low  * t_block_size + 1 * a_block_size, x, t_low < NB_TURBIDITY),
+            t_high_a_high = bezier_interpolate(dataset, result_size, t_high * t_block_size + 1 * a_block_size, x, t_high < NB_TURBIDITY);
 
         // Interpolate on turbidity
         FloatStorage res_a_low  = dr::lerp(t_low_a_low, t_high_a_low, t_rem),
@@ -227,7 +226,8 @@ NAMESPACE_BEGIN(mitsuba)
         UInt32Storage idx = dr::arange<UInt32Storage>(nb_params * albedo.size());
                       idx /= nb_params;
 
-        return dr::lerp(res_a_low, res_a_high, dr::gather<FloatStorage>(albedo, idx));
+        FloatStorage result = dr::lerp(res_a_low, res_a_high, dr::gather<FloatStorage>(albedo, idx));
+        return result & (0.f <= eta && eta <= 0.5f * dr::Pi<Float>);
     }
 
 
@@ -281,90 +281,90 @@ NAMESPACE_BEGIN(mitsuba)
      * in "Solar energy", vol 27, number 5, 2001 by Pergamon Press.
      */
     template <typename Float>
-    Vector<Float, 3> compute_sun_coordinates(const DateTimeRecord<Float>& dateTime, const LocationRecord<Float>& location) {
+    Vector<Float, 3> compute_sun_coordinates(const DateTimeRecord<Float>& date_time, const LocationRecord<Float>& location) {
         using Int32 = dr::int32_array_t<Float>;
 
         // Main variables
-        Float elapsedJulianDays, decHours;
-        Float eclipticLongitude, eclipticObliquity;
-        Float rightAscension, declination;
+        Float elapsed_julian_days, dec_hours;
+        Float ecliptic_longitude, ecliptic_obliquity;
+        Float right_ascension, declination;
         Float elevation, azimuth;
 
         // Auxiliary variables
-        Float dY;
-        Float dX;
+        Float d_y;
+        Float d_x;
 
         /* Calculate difference in days between the current Julian Day
            and JD 2451545.0, which is noon 1 January 2000 Universal Time */
         {
             // Calculate time of the day in UT decimal hours
-            decHours = dateTime.hour - location.timezone +
-                (dateTime.minute + dateTime.second / 60.0 ) / 60.0;
+            dec_hours = date_time.hour - location.timezone +
+                (date_time.minute + date_time.second / 60.f ) / 60.f;
 
             // Calculate current Julian Day
-            Int32 liAux1 = (dateTime.month-14) / 12;
-            Int32 liAux2 = (1461*(dateTime.year + 4800 + liAux1)) / 4
-                + (367 * (dateTime.month - 2 - 12 * liAux1)) / 12
-                - (3 * ((dateTime.year + 4900 + liAux1) / 100)) / 4
-                + dateTime.day - 32075;
-            Float dJulianDate = liAux2 - 0.5 + decHours / 24.0;
+            Int32 li_aux_1 = (date_time.month-14) / 12;
+            Int32 li_aux_2 = (1461*(date_time.year + 4800 + li_aux_1)) / 4
+                + (367 * (date_time.month - 2 - 12 * li_aux_1)) / 12
+                - (3 * ((date_time.year + 4900 + li_aux_1) / 100)) / 4
+                + date_time.day - 32075;
+            Float d_julian_date = li_aux_2 - 0.5f + dec_hours / 24.f;
 
             // Calculate difference between current Julian Day and JD 2451545.0
-            elapsedJulianDays = dJulianDate - 2451545.0;
+            elapsed_julian_days = d_julian_date - 2451545.f;
         }
 
         /* Calculate ecliptic coordinates (ecliptic longitude and obliquity of the
            ecliptic in radians but without limiting the angle to be less than 2*Pi
            (i.e., the result may be greater than 2*Pi) */
         {
-            Float omega = 2.1429 - 0.0010394594 * elapsedJulianDays;
-            Float meanLongitude = 4.8950630 + 0.017202791698 * elapsedJulianDays; // Radians
-            Float anomaly = 6.2400600 + 0.0172019699 * elapsedJulianDays;
+            Float omega = 2.1429f - 0.0010394594f * elapsed_julian_days;
+            Float mean_longitude = 4.8950630f + 0.017202791698f * elapsed_julian_days; // Radians
+            Float anomaly = 6.2400600f + 0.0172019699f * elapsed_julian_days;
 
-            eclipticLongitude = meanLongitude + 0.03341607 * dr::sin(anomaly)
-                + 0.00034894 * dr::sin(2*anomaly) - 0.0001134
-                - 0.0000203 * dr::sin(omega);
+            ecliptic_longitude = mean_longitude + 0.03341607f * dr::sin(anomaly)
+                + 0.00034894f * dr::sin(2*anomaly) - 0.0001134f
+                - 0.0000203f * dr::sin(omega);
 
-            eclipticObliquity = 0.4090928 - 6.2140e-9 * elapsedJulianDays
-                + 0.0000396 * dr::cos(omega);
+            ecliptic_obliquity = 0.4090928f - 6.2140e-9f * elapsed_julian_days
+                + 0.0000396f * dr::cos(omega);
         }
 
         /* Calculate celestial coordinates ( right ascension and declination ) in radians
            but without limiting the angle to be less than 2*Pi (i.e., the result may be
            greater than 2*Pi) */
         {
-            Float sinEclipticLongitude = dr::sin(eclipticLongitude);
-            dY = dr::cos(eclipticObliquity) * sinEclipticLongitude;
-            dX = dr::cos(eclipticLongitude);
-            rightAscension = dr::atan2(dY, dX);
-            rightAscension += dr::select(rightAscension < 0.0, dr::TwoPi<Float>, 0.0);
+            Float sin_ecliptic_longitude = dr::sin(ecliptic_longitude);
+            d_y = dr::cos(ecliptic_obliquity) * sin_ecliptic_longitude;
+            d_x = dr::cos(ecliptic_longitude);
+            right_ascension = dr::atan2(d_y, d_x);
+            right_ascension += dr::select(right_ascension < 0.f, dr::TwoPi<Float>, 0.f);
 
-            declination = dr::asin(dr::sin(eclipticObliquity) * sinEclipticLongitude);
+            declination = dr::asin(dr::sin(ecliptic_obliquity) * sin_ecliptic_longitude);
         }
 
         // Calculate local coordinates (azimuth and zenith angle) in degrees
         {
-            Float greenwichMeanSiderealTime = 6.6974243242
-                + 0.0657098283 * elapsedJulianDays + decHours;
+            Float greenwich_mean_sidereal_time = 6.6974243242f
+                + 0.0657098283f * elapsed_julian_days + dec_hours;
 
-            Float localMeanSiderealTime = dr::deg_to_rad(greenwichMeanSiderealTime * 15
+            Float local_mean_sidereal_time = dr::deg_to_rad(greenwich_mean_sidereal_time * 15
                 + location.longitude);
 
-            Float latitudeInRadians = dr::deg_to_rad(location.latitude);
-            Float cosLatitude = dr::cos(latitudeInRadians);
-            Float sinLatitude = dr::sin(latitudeInRadians);
+            Float latitude_in_radians = dr::deg_to_rad(location.latitude);
+            Float cos_latitude = dr::cos(latitude_in_radians);
+            Float sin_latitude = dr::sin(latitude_in_radians);
 
-            Float hourAngle = localMeanSiderealTime - rightAscension;
-            Float cosHourAngle = dr::cos(hourAngle);
+            Float hour_angle = local_mean_sidereal_time - right_ascension;
+            Float cos_hour_angle = dr::cos(hour_angle);
 
-            elevation = dr::acos(cosLatitude * cosHourAngle
-                * dr::cos(declination) + dr::sin(declination) * sinLatitude);
+            elevation = dr::acos(cos_latitude * cos_hour_angle
+                * dr::cos(declination) + dr::sin(declination) * sin_latitude);
 
-            dY = -dr::sin(hourAngle);
-            dX = dr::tan(declination) * cosLatitude - sinLatitude * cosHourAngle;
+            d_y = -dr::sin(hour_angle);
+            d_x = dr::tan(declination) * cos_latitude - sin_latitude * cos_hour_angle;
 
-            azimuth = dr::atan2(dY, dX);
-            azimuth += dr::select(azimuth < 0.0, dr::TwoPi<Float>, 0.0);
+            azimuth = dr::atan2(d_y, d_x);
+            azimuth += dr::select(azimuth < 0.f, dr::TwoPi<Float>, 0.f);
 
             // Parallax Correction
             elevation += (EARTH_MEAN_RADIUS / ASTRONOMICAL_UNIT) * dr::sin(elevation);
@@ -406,8 +406,6 @@ NAMESPACE_BEGIN(mitsuba)
         using UInt32Storage = DynamicBuffer<dr::uint32_array_t<Float>>;
         using FloatStorage = DynamicBuffer<Float>;
 
-        const dr::mask_t<Float> active = turbidity >= 1 && turbidity <= 10;
-
         UInt32 t_high = dr::floor2int<UInt32>(turbidity),
                t_low = t_high - 1;
         Float  t_rem = turbidity - t_high;
@@ -415,8 +413,8 @@ NAMESPACE_BEGIN(mitsuba)
         constexpr uint32_t t_block_size = dataset_size / NB_TURBIDITY;
 
         UInt32Storage idx = dr::arange<UInt32Storage>(t_block_size);
-        return dr::lerp(dr::gather<FloatStorage>(sun_radiance_dataset, t_low * t_block_size + idx, active),
-                        dr::gather<FloatStorage>(sun_radiance_dataset, t_high * t_block_size + idx, active),
+        return dr::lerp(dr::gather<FloatStorage>(sun_radiance_dataset, t_low * t_block_size + idx, t_low < NB_TURBIDITY),
+                        dr::gather<FloatStorage>(sun_radiance_dataset, t_high * t_block_size + idx, t_high < NB_TURBIDITY),
                         t_rem);
     }
 
@@ -516,7 +514,12 @@ NAMESPACE_BEGIN(mitsuba)
      */
     template <typename FileType, typename OutType>
     DynamicBuffer<OutType> array_from_file(const std::string &path) {
-        FileStream file(path, FileStream::EMode::ERead);
+        auto fs = Thread::thread()->file_resolver();
+        fs::path file_path = fs->resolve(path);
+        if (!fs::exists(file_path))
+            Log(Error, "\"%s\": file does not exist!", file_path);
+
+        FileStream file(file_path, FileStream::EMode::ERead);
 
         using ScalarFileType = dr::value_t<FileType>;
         using FileStorage = DynamicBuffer<FileType>;
@@ -603,6 +606,7 @@ NAMESPACE_BEGIN(mitsuba)
      * Solar spectral dataset and the limb darkening dataset.
      */
 
+    /*
     // Header with datasets downloadable from here:
     // https://cgg.mff.cuni.cz/projects/SkylightModelling/
     #include "ArHosekSkyModelData_Spectral.h"
@@ -681,12 +685,10 @@ NAMESPACE_BEGIN(mitsuba)
         .dataset = limbDarkeningDatasets
     };
 
-    /**
-     * Serializes the Limb Darkening dataset to a file
-     *
-     * @param path Path of the file to write to
-     */
-    void write_limb_darkening_data(const std::string& path) {
+
+     /// Serializes the Limb Darkening dataset to a file
+     /// @param path Path of the file to write to
+     void write_limb_darkening_data(const std::string& path) {
         const auto [nb_dims, dim_size, p_dataset] = limb_darkening_dataset;
         FileStream file(path, FileStream::EMode::ETruncReadWrite);
 
@@ -708,12 +710,9 @@ NAMESPACE_BEGIN(mitsuba)
         file.close();
     }
 
-    /**
-     * Precomputes the sun RGB dataset from the spectral dataset and
-     * the limb darkening dataset
-     *
-     * @param path Path of the file to write to
-     */
+    /// Precomputes the sun RGB dataset from the spectral dataset and
+    /// the limb darkening dataset
+    /// @param path Path of the file to write to
     void write_sun_data_rgb(const std::string& path) {
         const auto [nb_dims_solar, dim_size_solar, p_dataset_solar] = solar_dataset;
         const auto [nb_dims_ld, dim_size_ld, p_dataset_ld] = limb_darkening_dataset;
@@ -770,13 +769,11 @@ NAMESPACE_BEGIN(mitsuba)
         free(buffer);
     }
 
-    /**
-     * Re-orders the sun spectral dataset from the original dataset
-     * From [wavelengths x turbidity x sun_segments x sun_ctrl_pts]
-     * to   [turbidity x sun_segments x wavelengths x sun_ctrl_pts]
-     *
-     * @param path Path of the file to write to
-     */
+    /// Re-orders the sun spectral dataset from the original dataset
+    /// From [wavelengths x turbidity x sun_segments x sun_ctrl_pts]
+    /// to   [turbidity x sun_segments x wavelengths x sun_ctrl_pts]
+    ///
+    /// @param path Path of the file to write to
     void write_sun_data_spectral(const std::string& path) {
         const auto [nb_dims, dim_size, p_dataset] = solar_dataset;
         FileStream file(path, FileStream::EMode::ETruncReadWrite);
@@ -812,14 +809,12 @@ NAMESPACE_BEGIN(mitsuba)
     }
 
 
-    /**
-     * Re-orders the sky dataset from the original dataset
-     * From [wavelengths/channels x albedo x turbidity x sky_ctrl_pts (x sky_params)]
-     * to   [turbidity x albedo x sky_ctrl_pts x wavelengths/channels (x sky_params)]
-     *
-     * @param path Path of the file to write to
-     * @param dataset Dataset metadata to write
-     */
+    /// Re-orders the sky dataset from the original dataset
+    /// From [wavelengths/channels x albedo x turbidity x sky_ctrl_pts (x sky_params)]
+    /// to   [turbidity x albedo x sky_ctrl_pts x wavelengths/channels (x sky_params)]
+    ///
+    /// @param path Path of the file to write to
+    /// @param dataset Dataset metadata to write
     void write_sky_data(const std::string &path, const DatasetMetadata& dataset) {
         const auto [nb_dims, dim_size, p_dataset] = dataset;
         FileStream file(path, FileStream::EMode::ETruncReadWrite);
@@ -882,13 +877,11 @@ NAMESPACE_BEGIN(mitsuba)
         file.close();
     }
 
-    /**
-     * Generates the datasets files from the original, this function should not
-     * be called for each render job, only when the dataset files are lost.
-     *
-     * @param path where the dataset files will be written
-     *             The path should include the prefix of the filename
-     */
+    /// Generates the datasets files from the original, this function should not
+    /// be called for each render job, only when the dataset files are lost.
+    ///
+    /// @param path where the dataset files will be written
+    ///            The path should include the prefix of the filename
     void write_sun_sky_model_data(const std::string &path) {
         write_sky_data(path + "sky_spec_params.bin", f_spectral);
         write_sky_data(path + "sky_spec_rad.bin", l_spectral);
@@ -903,38 +896,40 @@ NAMESPACE_BEGIN(mitsuba)
 
 
     // Here is the python script used to generate the truncated gaussian dataset file
-    /*
-    import sys; sys.path.insert(0, "build/python")
 
-    import numpy as np
-    import pandas as pd
+    //import sys; sys.path.insert(0, "build/python")
 
-    import mitsuba as mi
+    //import numpy as np
+    //import pandas as pd
 
-    mi.set_variant("llvm_rgb")
+    //import mitsuba as mi
 
-    filename = "<path to>/model_hosek.csv"
-    destination_folder = ...
+    //mi.set_variant("llvm_rgb")
 
-    # Delete unused data
-    df = pd.read_csv(filename)
-    df.pop('RMSE')
-    df.pop('MAE')
-    df.pop('Volume')
-    df.pop('Normalization')
-    df.pop('Azimuth')
+    //filename = "<path to>/model_hosek.csv"
+    //destination_folder = ...
 
-    arr = df.to_numpy()
+    //# Delete unused data
+    //df = pd.read_csv(filename)
+    //df.pop('RMSE')
+    //df.pop('MAE')
+    //df.pop('Volume')
+    //df.pop('Normalization')
+    //df.pop('Azimuth')
 
-    # Sort the data by turbidity and elevation
-    sort_args = np.lexsort([arr[::, 1], arr[::, 0]])
-    simplified_arr = arr[sort_args, 2:]
+    //arr = df.to_numpy()
 
-    # Convert the elevation to zenith angle on mu_theta
-    simplified_arr[::, 1] = np.pi/2 - simplified_arr[::, 1]
+    //# Sort the data by turbidity and elevation
+    //sort_args = np.lexsort([arr[::, 1], arr[::, 0]])
+    //simplified_arr = arr[sort_args, 2:]
 
-    shape = (9, 30, 5, 5)
-    mi.array_to_file(f"{destination_folder}/tgmm_tables.bin", mi.Float(np.ravel(simplified_arr)), shape)
+    //# Convert the elevation to zenith angle on mu_theta
+    //simplified_arr[::, 1] = np.pi/2 - simplified_arr[::, 1]
+
+    //shape = (9, 30, 5, 5)
+    //mi.array_to_file(f"{destination_folder}/tgmm_tables.bin", mi.Float(np.ravel(simplified_arr)), shape)
+
     */
+
 
 NAMESPACE_END(mitsuba)
